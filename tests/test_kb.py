@@ -1,11 +1,12 @@
 import os
 import subprocess
+import time
 from pathlib import Path
 
 import pytest
 
 from tocsin import kb
-from tocsin.kb import kb_snapshot, read_kb
+from tocsin.kb import _extract_link, kb_snapshot, read_kb
 from tocsin.models import Package
 
 FIXTURES = Path(__file__).parent / 'fixtures' / 'kb'
@@ -245,3 +246,57 @@ def test_snapshot_never_spawns_a_process(tmp_path, monkeypatch):
     snapshot = kb_snapshot(tmp_path)
 
     assert snapshot['commit'] == 'd' * 40
+
+
+# --- _extract_link: hostile input must stay cheap ---------------------------
+
+def test_extract_link_finds_markdown_link():
+    assert _extract_link('[curl advisory](https://curl.se/docs/CVE-2023-38545.html)') == (
+        'https://curl.se/docs/CVE-2023-38545.html'
+    )
+
+
+def test_extract_link_finds_bare_url():
+    assert _extract_link('https://example.com/advisory') == 'https://example.com/advisory'
+
+
+def test_extract_link_returns_none_for_plain_text():
+    assert _extract_link('no link here') is None
+
+
+def test_extract_link_on_hostile_cell_is_fast():
+    hostile_cell = '[' * 100_000
+
+    start = time.monotonic()
+    result = _extract_link(hostile_cell)
+    elapsed = time.monotonic() - start
+
+    assert result is None
+    assert elapsed < 0.5, f'_extract_link took {elapsed:.3f}s on a hostile cell'
+
+
+def test_read_kb_handles_a_page_with_a_hostile_advisory_source_cell_quickly(tmp_path):
+    page_dir = tmp_path / 'wiki' / 'homebrew'
+    page_dir.mkdir(parents=True)
+    hostile_cell = '[' * 100_000
+    page = (
+        '# hostile (Homebrew)\n\n'
+        '**Current Status:** advisory-mapped\n\n'
+        '## Audit History\n\n'
+        '| Date | Auditor | Scope | Methodology | Findings | Source |\n'
+        '|------|---------|-------|-------------|----------|--------|\n\n'
+        '## Known Vulnerabilities\n\n'
+        '| CVE / Issue | Severity | Description | Fixed in | Source |\n'
+        '|-------------|----------|-------------|----------|--------|\n'
+        f'| CVE-2024-0001 | High | something bad | 1.0 | {hostile_cell} |\n'
+    )
+    (page_dir / 'hostile.md').write_text(page)
+    package = Package('homebrew', 'hostile', '1.0', {})
+
+    start = time.monotonic()
+    context = read_kb(tmp_path, package)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5, f'read_kb took {elapsed:.3f}s on a hostile advisory cell'
+    assert context['status'] == 'found'
+    assert context['advisories'][0]['id'] == 'CVE-2024-0001'

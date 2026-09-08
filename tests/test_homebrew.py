@@ -174,6 +174,22 @@ def test_malformed_brew_json_raises_decode_error():
         parse_brew('not json at all')
 
 
+@pytest.mark.parametrize('payload', [
+    '[]',
+    'null',
+    '"hi"',
+    '{"formulae": ["curl"]}',
+    '{"formulae": [{"name": "x", "installed": "1.0"}]}',
+    '{"casks": ["c"]}',
+])
+def test_wrong_shaped_but_valid_json_raises_value_error_not_attribute_error(payload):
+    # Valid JSON that isn't the v2 schema's shape must never escape as an
+    # uncaught AttributeError (e.g. calling .get() on a string or list);
+    # it must be a well-typed ValueError inventory_brew can map to 'error'.
+    with pytest.raises(ValueError):
+        parse_brew(payload)
+
+
 # --- inventory_brew: Homebrew missing ---------------------------------------
 
 def test_inventory_unavailable_when_brew_not_on_path(monkeypatch):
@@ -248,6 +264,20 @@ def test_inventory_error_on_unparseable_json(monkeypatch):
     result = inventory_brew(kb_root=None, runner=fake_runner)
 
     assert result.completion == 'error'
+
+
+def test_inventory_error_on_wrong_shaped_json_backstop(monkeypatch):
+    # A well-formed JSON array (not an object) must map to 'error', not
+    # crash inventory_brew with an uncaught AttributeError.
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, '[]', '', None)
+
+    result = inventory_brew(kb_root=None, runner=fake_runner)
+
+    assert result.completion == 'error'
+    assert result.errors
 
 
 # --- inventory_brew: success path -------------------------------------------
@@ -366,3 +396,106 @@ def test_inventory_unassessed_packages_do_not_block_completion(monkeypatch):
     assert all(f.status == 'unassessed' for f in result.findings)
     assert result.metadata['coverage']['assessed'] == 0
     assert result.metadata['coverage']['unassessed'] == len(result.findings)
+
+
+def test_inventory_untapped_formula_kb_context_is_unavailable_not_core(monkeypatch):
+    # "tap": null happens for a formula installed from a local .rb file or
+    # a URL. It must never be treated as homebrew/core.
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+    payload = _brew_payload(formulae=[{
+        'name': 'curl',
+        'full_name': 'curl',
+        'tap': None,
+        'installed': [{'version': '9.9.9'}],
+    }])
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    result = inventory_brew(kb_root=KB_FIXTURES, runner=fake_runner)
+
+    kb_context = result.metadata['packages'][0]['kb']
+    assert kb_context['status'] == 'unavailable'
+    assert 'untapped or unknown tap' in kb_context['reason']
+    assert result.findings[0].evidence == ()
+
+
+# --- inventory_brew: KB attribution and metadata['kb'] unification ---------
+
+def test_inventory_kb_metadata_available_carries_attribution(monkeypatch):
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, REAL_BREW_JSON, '', None)
+
+    result = inventory_brew(kb_root=KB_FIXTURES, runner=fake_runner)
+
+    kb_meta = result.metadata['kb']
+    assert kb_meta['status'] == 'available'
+    assert kb_meta['root'] == str(KB_FIXTURES)
+    assert kb_meta['license'] == 'CC BY 4.0'
+    assert kb_meta['license_url'] == (
+        'https://github.com/travis-burmaster/oss-security-kb/blob/main/LICENSE'
+    )
+    assert kb_meta['source'] == 'https://github.com/travis-burmaster/oss-security-kb'
+    assert kb_meta['maintainer'] == 'Travis Burmaster'
+
+
+def test_inventory_kb_metadata_unavailable_when_no_kb(monkeypatch):
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, REAL_BREW_JSON, '', None)
+
+    result = inventory_brew(kb_root=None, runner=fake_runner)
+
+    assert result.metadata['kb'] == {'status': 'unavailable', 'reason': 'no --kb path supplied'}
+
+
+# --- inventory_brew: invalid --kb path (finding 7) --------------------------
+
+def test_inventory_kb_path_that_does_not_exist_is_partial_and_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+    missing_kb = tmp_path / 'does-not-exist'
+    payload = _brew_payload(formulae=[{
+        'name': 'thing',
+        'full_name': 'thing',
+        'tap': 'homebrew/core',
+        'installed': [{'version': '1.0.0'}],
+    }])
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    result = inventory_brew(kb_root=missing_kb, runner=fake_runner)
+
+    assert result.completion == 'partial'
+    assert result.errors and str(missing_kb) in result.errors[0]
+    assert len(result.findings) == 1  # the inventory itself still succeeded
+    assert result.findings[0].status == 'unassessed'
+    assert result.metadata['kb']['status'] == 'unreadable'
+    assert result.metadata['kb']['root'] == str(missing_kb)
+    assert result.metadata['packages'][0]['kb'] == {
+        'status': 'unavailable',
+        'reason': result.metadata['kb']['reason'],
+    }
+
+
+def test_inventory_kb_path_that_is_a_file_is_partial_and_unavailable(monkeypatch, tmp_path):
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+    kb_file = tmp_path / 'not-a-directory.txt'
+    kb_file.write_text('oops')
+    payload = _brew_payload(formulae=[{
+        'name': 'thing',
+        'full_name': 'thing',
+        'tap': 'homebrew/core',
+        'installed': [{'version': '1.0.0'}],
+    }])
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    result = inventory_brew(kb_root=kb_file, runner=fake_runner)
+
+    assert result.completion == 'partial'
+    assert result.metadata['kb']['status'] == 'unreadable'

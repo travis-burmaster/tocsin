@@ -26,6 +26,13 @@ _BREW_EXTRA_ENV = {'HOMEBREW_NO_AUTO_UPDATE': '1'}
 
 _CORE_TAP = 'homebrew/core'
 
+# Attribution for the OSS Security KB, attached once per report (not per
+# package) in metadata['kb'] whenever a readable KB checkout is in use.
+_KB_LICENSE = 'CC BY 4.0'
+_KB_LICENSE_URL = 'https://github.com/travis-burmaster/oss-security-kb/blob/main/LICENSE'
+_KB_SOURCE = 'https://github.com/travis-burmaster/oss-security-kb'
+_KB_MAINTAINER = 'Travis Burmaster'
+
 # Splits a Homebrew revision suffix, e.g. "8.0.0_1" -> version "8.0.0",
 # revision "1", so downstream matchers never see the underscore form.
 _REVISION_SUFFIX_RE = re.compile(r'^(?P<version>.+)_(?P<revision>\d+)$')
@@ -51,8 +58,16 @@ def _formula_packages(formula: dict[str, object]) -> list[Package]:
     tap = formula.get('tap')
     formula_revision = formula.get('revision')
 
+    installed = formula.get('installed') or []
+    if not isinstance(installed, list):
+        raise ValueError(
+            f'brew JSON formula "installed" must be a list, got {type(installed).__name__}'
+        )
+
     packages: list[Package] = []
-    for entry in formula.get('installed') or []:
+    for entry in installed:
+        if not isinstance(entry, dict):
+            raise ValueError('brew JSON formula "installed" entries must be objects')
         raw_version = str(entry.get('version', ''))
         version, suffix_revision = _split_revision(raw_version)
 
@@ -101,15 +116,34 @@ def parse_brew(payload: str) -> list[Package]:
     One Package per entry in a formula's `installed` list (so a formula
     with two installed versions yields two Packages); casks yield one
     Package each from their single `installed` version. Raises
-    `json.JSONDecodeError` on unparseable input -- callers decide how
-    that maps onto a CheckResult's completion.
+    `json.JSONDecodeError` on unparseable input, and `ValueError` on
+    input that is valid JSON but the wrong shape (not an object, or a
+    "formulae"/"casks"/"installed" entry that isn't the list-of-objects
+    the v2 schema promises) -- callers decide how that maps onto a
+    CheckResult's completion.
     """
     data = json.loads(payload)
+    if not isinstance(data, dict):
+        raise ValueError(f'brew JSON payload must be an object, got {type(data).__name__}')
+
     packages: list[Package] = []
-    for formula in data.get('formulae', []):
+
+    formulae = data.get('formulae', [])
+    if not isinstance(formulae, list):
+        raise ValueError(f'brew JSON "formulae" must be a list, got {type(formulae).__name__}')
+    for formula in formulae:
+        if not isinstance(formula, dict):
+            raise ValueError('brew JSON formula entries must be objects')
         packages.extend(_formula_packages(formula))
-    for cask in data.get('casks', []):
+
+    casks = data.get('casks', [])
+    if not isinstance(casks, list):
+        raise ValueError(f'brew JSON "casks" must be a list, got {type(casks).__name__}')
+    for cask in casks:
+        if not isinstance(cask, dict):
+            raise ValueError('brew JSON cask entries must be objects')
         packages.extend(_cask_packages(cask))
+
     return packages
 
 
@@ -120,19 +154,55 @@ def _now_iso() -> str:
 def _kb_context_for(package: Package, kb_root: Path | None) -> dict[str, object]:
     if kb_root is None:
         return {'status': 'unavailable', 'reason': 'no --kb path supplied'}
-    tap = package.provenance.get('tap')
-    if package.ecosystem == 'homebrew' and tap not in (None, _CORE_TAP):
-        return {
-            'status': 'unavailable',
-            'reason': f'tap-qualified formula ({tap}); KB lookup is limited to {_CORE_TAP}',
-        }
+    if package.ecosystem == 'homebrew':
+        tap = package.provenance.get('tap')
+        if tap is None:
+            # A formula installed from a local .rb file or a URL has no
+            # tap at all -- never treat that as core by default.
+            return {
+                'status': 'unavailable',
+                'reason': (
+                    f'formula has an untapped or unknown tap; KB lookup is '
+                    f'limited to {_CORE_TAP}'
+                ),
+            }
+        if tap != _CORE_TAP:
+            return {
+                'status': 'unavailable',
+                'reason': f'tap-qualified formula ({tap}); KB lookup is limited to {_CORE_TAP}',
+            }
     return read_kb(kb_root, package)
 
 
 def _kb_metadata(kb_root: Path | None) -> dict[str, object]:
+    """Build the once-per-report metadata['kb'] entry, in a single shape.
+
+    'unavailable' when no --kb was supplied at all; 'unreadable' when a
+    path was supplied but does not exist or is not a directory; else
+    'available', carrying the KB snapshot identity plus attribution
+    (license, source, maintainer) so it is preserved wherever this
+    report ends up, per the KB's attribution requirements.
+    """
     if kb_root is None:
         return {'status': 'unavailable', 'reason': 'no --kb path supplied'}
-    return kb_snapshot(kb_root)
+    kb_root = Path(kb_root)
+    if not kb_root.is_dir():
+        return {
+            'status': 'unreadable',
+            'root': str(kb_root),
+            'reason': f'--kb path does not exist or is not a directory: {kb_root}',
+        }
+    snapshot = kb_snapshot(kb_root)
+    return {
+        'status': 'available',
+        'root': snapshot.get('root'),
+        'commit': snapshot.get('commit'),
+        'dirty': snapshot.get('dirty'),
+        'license': _KB_LICENSE,
+        'license_url': _KB_LICENSE_URL,
+        'source': _KB_SOURCE,
+        'maintainer': _KB_MAINTAINER,
+    }
 
 
 def _empty_result(*, completion: str, errors: tuple[str, ...], kb_root: Path | None,
@@ -195,7 +265,11 @@ def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command)
 
     try:
         packages = parse_brew(result.stdout)
-    except (json.JSONDecodeError, TypeError, KeyError) as exc:
+    except (json.JSONDecodeError, TypeError, KeyError, ValueError, AttributeError) as exc:
+        # ValueError/AttributeError are a backstop: parse_brew shape-checks
+        # every level it descends into and raises ValueError itself, but
+        # this still catches anything an unanticipated JSON shape could
+        # trigger rather than letting it escape as an unhandled crash.
         return _empty_result(
             completion='error',
             errors=(f'could not parse brew info --json=v2 --installed output: {exc}',),
@@ -203,10 +277,19 @@ def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command)
             command=argv,
         )
 
+    kb_metadata = _kb_metadata(kb_root)
+    kb_unreadable_reason = kb_metadata.get('reason') if kb_metadata.get('status') == 'unreadable' else None
+
     findings: list[Finding] = []
     serialized_packages: list[dict[str, object]] = []
     for package in packages:
-        context = _kb_context_for(package, kb_root)
+        if kb_unreadable_reason is not None:
+            # --kb was given but the path itself is unusable: the
+            # inventory still succeeded, but no package can get real KB
+            # context, regardless of tap or ecosystem.
+            context: dict[str, object] = {'status': 'unavailable', 'reason': kb_unreadable_reason}
+        else:
+            context = _kb_context_for(package, kb_root)
         subject = f'{package.name} {package.version}'
         is_cask = package.ecosystem == 'homebrew-cask'
         action = (
@@ -239,9 +322,17 @@ def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command)
 
     metadata: dict[str, object] = {
         'packages': serialized_packages,
-        'kb': _kb_metadata(kb_root),
+        'kb': kb_metadata,
         'coverage': {'assessed': 0, 'unassessed': len(packages)},
         'command': argv,
     }
+
+    if kb_unreadable_reason is not None:
+        # The inventory itself completed; only the requested KB context
+        # could not be attached, so this is partial, not an error.
+        return CheckResult(
+            name='brew', completion='partial', findings=tuple(findings),
+            errors=(kb_unreadable_reason,), metadata=metadata,
+        )
 
     return CheckResult(name='brew', completion='complete', findings=tuple(findings), errors=(), metadata=metadata)

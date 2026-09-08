@@ -1,11 +1,11 @@
+import json
 import platform
-import shutil
 import stat
 from pathlib import Path
 
-import pytest
-
 from tocsin.cli import main
+from tocsin.models import CommandResult
+from tocsin.platforms import macos
 
 
 def test_empty_scope_rejected():
@@ -91,18 +91,31 @@ def test_doctor_reports_missing_kb_path(tmp_path, capsys):
     assert f"kb: {missing} (not found)" in out
 
 
-def test_scan_brew_with_kb_fixture_is_complete_and_unassessed(capsys):
-    if shutil.which('brew') is None:
-        pytest.skip('brew not installed on this host')
-
+def test_scan_brew_with_kb_fixture_is_complete_and_unassessed(monkeypatch, capsys):
+    # Never hit the real `brew` binary from a CLI-level test: patch the
+    # macos adapter's shutil.which so it "finds" a fake brew, and inject a
+    # fake runner all the way through main() so no subprocess ever runs.
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
     kb_root = Path(__file__).parent / 'fixtures' / 'kb'
+    payload = json.dumps({
+        'formulae': [{
+            'name': 'curl',
+            'full_name': 'curl',
+            'tap': 'homebrew/core',
+            'installed': [{'version': '8.9.1'}],
+        }],
+        'casks': [],
+    })
 
-    code = main(['scan', '--brew', '--kb', str(kb_root)])
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    code = main(['scan', '--brew', '--kb', str(kb_root)], runner=fake_runner)
 
     assert code == 0
     out = capsys.readouterr().out
     assert '== brew [complete] ==' in out
-    assert 'coverage:' in out
+    assert 'coverage: assessed=0 unassessed=1' in out
 
 
 def test_scan_reports_unsupported_scope_explicitly(capsys):

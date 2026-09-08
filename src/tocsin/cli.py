@@ -134,7 +134,7 @@ def _scope_requested(args: argparse.Namespace, name: str) -> bool:
     return value if name in _SCAN_BOOL_SCOPES else value is not None
 
 
-def _run_scan(args: argparse.Namespace) -> int:
+def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
     requested_scopes = [name for name in _SCAN_SCOPE_ORDER if _scope_requested(args, name)]
     if not requested_scopes:
         print(
@@ -158,7 +158,7 @@ def _run_scan(args: argparse.Namespace) -> int:
     for scope in requested_scopes:
         if scope == "brew" and scope in capabilities:
             kb_root = Path(args.kb) if args.kb else None
-            results.append(inventory_brew(kb_root=kb_root))
+            results.append(inventory_brew(kb_root=kb_root, runner=runner))
             continue
         results.append(CheckResult(
             name=scope,
@@ -192,7 +192,7 @@ def _run_scan(args: argparse.Namespace) -> int:
     return code
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, runner: Runner = run_command) -> int:
     parser = _build_parser()
     try:
         args = parser.parse_args(argv)
@@ -203,9 +203,9 @@ def main(argv: list[str] | None = None) -> int:
         return int(code)
 
     if args.command == "doctor":
-        return _run_doctor(kb=args.kb)
+        return _run_doctor(kb=args.kb, runner=runner)
     if args.command == "scan":
-        return _run_scan(args)
+        return _run_scan(args, runner=runner)
 
     # argparse's subparsers(required=True) makes this unreachable.
     print(f"error: unknown command: {args.command}", file=sys.stderr)

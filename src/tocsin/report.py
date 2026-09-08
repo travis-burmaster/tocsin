@@ -92,8 +92,9 @@ def _coverage_line(metadata: dict[str, object]) -> str | None:
     """Build a compact 'coverage: ...' summary line, or None if there's nothing to show.
 
     Metadata is otherwise invisible in the text report; this surfaces the
-    two facts a reader most often wants without restructuring the
-    renderer: assessed/unassessed counts and the KB commit in use.
+    facts a reader most often wants without restructuring the renderer:
+    assessed/unassessed counts and the KB's status (its commit when a
+    readable KB was used, or why it wasn't when not).
     """
     if not isinstance(metadata, dict):
         return None
@@ -102,9 +103,13 @@ def _coverage_line(metadata: dict[str, object]) -> str | None:
     if isinstance(coverage, dict):
         parts.append(f"assessed={coverage.get('assessed')} unassessed={coverage.get('unassessed')}")
     kb_info = metadata.get('kb')
-    if isinstance(kb_info, dict) and 'commit' in kb_info:
-        commit = kb_info.get('commit')
-        parts.append(f"kb_commit={_escape_control_chars(commit) if commit else 'none'}")
+    if isinstance(kb_info, dict):
+        status = kb_info.get('status')
+        if status == 'available':
+            commit = kb_info.get('commit')
+            parts.append(f"kb_commit={_escape_control_chars(commit) if commit else 'none'}")
+        elif status == 'unreadable':
+            parts.append('kb=unreadable')
     if not parts:
         return None
     return "coverage: " + ", ".join(parts)

@@ -75,7 +75,16 @@ def test_text_report_shows_coverage_and_kb_commit():
                        '2026-09-08T00:00:00Z')
     result = CheckResult('brew', 'complete', (finding,), (), {
         'coverage': {'assessed': 0, 'unassessed': 1},
-        'kb': {'commit': 'a' * 40, 'dirty': None, 'root': '/kb'},
+        'kb': {
+            'status': 'available',
+            'root': '/kb',
+            'commit': 'a' * 40,
+            'dirty': None,
+            'license': 'CC BY 4.0',
+            'license_url': 'https://github.com/travis-burmaster/oss-security-kb/blob/main/LICENSE',
+            'source': 'https://github.com/travis-burmaster/oss-security-kb',
+            'maintainer': 'Travis Burmaster',
+        },
     })
 
     text = render_text([result], {'requested_scopes': ['brew']})
@@ -94,6 +103,17 @@ def test_text_report_coverage_line_handles_missing_kb_commit():
 
     assert 'coverage: assessed=0 unassessed=0' in text
     assert 'kb_commit' not in text
+
+
+def test_text_report_coverage_line_flags_unreadable_kb_path():
+    result = CheckResult('brew', 'partial', (), ('--kb path does not exist',), {
+        'coverage': {'assessed': 0, 'unassessed': 1},
+        'kb': {'status': 'unreadable', 'root': '/nope', 'reason': '--kb path does not exist'},
+    })
+
+    text = render_text([result], {'requested_scopes': ['brew']})
+
+    assert 'coverage: assessed=0 unassessed=1, kb=unreadable' in text
 
 
 def test_text_report_omits_coverage_line_when_no_metadata():

@@ -56,7 +56,6 @@ _HEADING_RE = re.compile(r'^#\s+(.+)$', re.MULTILINE)
 _STATUS_RE = re.compile(r'\*\*Current Status:\*\*\s*(.+)')
 _REPOSITORY_RE = re.compile(r'\*\*Repository:\*\*\s*(.+)')
 _LAST_UPDATED_RE = re.compile(r'\*Last updated:\s*(\d{4}-\d{2}-\d{2})')
-_SOURCE_LINK_RE = re.compile(r'\[[^\]]*\]\(([^)]+)\)')
 _DATE_CELL_RE = re.compile(r'^\d{4}-\d{2}-\d{2}$')
 _ADVISORY_ID_RE = re.compile(r'^[\w.\-]+$')
 _TABLE_SEPARATOR_RE = re.compile(r'^:?-{2,}:?$')
@@ -106,10 +105,23 @@ def _table_rows(section: str) -> list[list[str]]:
     return rows[1:] if rows else []  # drop the header row
 
 
+# A source-link cell is a short Markdown link like "[curl advisory](https://...)"
+# or a bare URL; nothing legitimate needs more than this. Bounding the
+# length before scanning (and using plain substring search rather than a
+# regex over the whole cell) avoids quadratic blowup on a hostile cell
+# packed with bracket characters -- untrusted KB Markdown must stay cheap
+# to parse regardless of what a page author (or attacker) puts in a cell.
+_MAX_LINK_CELL_LEN = 500
+
+
 def _extract_link(cell: str) -> str | None:
-    match = _SOURCE_LINK_RE.search(cell)
-    if match:
-        return match.group(1)
+    cell = cell[:_MAX_LINK_CELL_LEN]
+    open_paren = cell.find('](')
+    if open_paren != -1:
+        close_paren = cell.find(')', open_paren + 2)
+        if close_paren != -1:
+            url = cell[open_paren + 2:close_paren].strip()
+            return url or None
     if cell.startswith('http://') or cell.startswith('https://'):
         return cell
     return None
