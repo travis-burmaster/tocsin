@@ -68,6 +68,17 @@ def _wait_for_event(event: threading.Event, timeout: float) -> bool:
     return event.wait(timeout)
 
 
+def _after_read() -> None:
+    """No-op hook called by a reader thread right after os.read() returns.
+
+    Exists purely so tests can inject a deterministic delay here, forcing
+    the race between a reader thread noticing an over-budget chunk and the
+    waiter thread noticing the child already exited -- the exact race the
+    post-join, authoritative overflow check in run_command guards against.
+    """
+    return None
+
+
 class _Budget:
     """A combined byte budget shared by the stdout and stderr readers."""
 
@@ -113,6 +124,7 @@ class _StreamReader:
                 data = os.read(fd, _CHUNK_SIZE)
             except OSError:
                 break
+            _after_read()
             if not data:
                 break  # EOF: writer end closed
             allowed = self._budget.consume(len(data))
@@ -168,6 +180,12 @@ def run_command(
         return CommandResult(None, "", "", "missing")
     except PermissionError:
         return CommandResult(None, "", "", "permission")
+    except OSError as exc:
+        # Anything else the OS refuses to exec (e.g. ENOEXEC "Exec format
+        # error" for a file with the executable bit set but invalid
+        # contents). The executable cannot be run as one either way; keep
+        # the errno/strerror text so it reaches the report.
+        return CommandResult(None, "", str(exc), "missing")
 
     wake = threading.Event()
     budget = _Budget(max_bytes, wake)
@@ -185,44 +203,68 @@ def run_command(
     waiter_thread = threading.Thread(target=_waiter, daemon=True)
     waiter_thread.start()
 
+    cancelled_interrupt: KeyboardInterrupt | None = None
+    triggered = False
+
     try:
-        triggered = _wait_for_event(wake, timeout)
-    except KeyboardInterrupt as interrupt:
-        _kill_process_group(proc)
+        try:
+            triggered = _wait_for_event(wake, timeout)
+        except KeyboardInterrupt as interrupt:
+            # Cleanup (kill/join/reap/close) happens in the finally below,
+            # exactly once, on every path -- this handler's only job is to
+            # remember that cancellation is what happened.
+            cancelled_interrupt = interrupt
+    finally:
+        # Kill the whole process group only if it might still be running:
+        # proc.poll() is a non-blocking check that returns the cached
+        # returncode without touching the OS again once the waiter thread
+        # has already reaped the child, so this avoids sending a signal to
+        # a pid the kernel could since have reused for an unrelated
+        # process. When the child is still alive (real timeout,
+        # cancellation, or overflow detected while it was still running),
+        # killing it here is what makes the join below terminate promptly
+        # instead of waiting out its bounded grace period, by unblocking
+        # reader threads stuck in a blocking read() on a pipe the child
+        # has stalled writing into.
+        if proc.poll() is None:
+            _kill_process_group(proc)
         _join_all(waiter_thread, stdout_thread, stderr_thread)
+        # proc.wait() blocks until the child actually exits; the kill just
+        # above guarantees that happens quickly, so this never hangs and
+        # always reaps -- no zombie survives run_command on any path.
         _reap(proc)
-        stdout_text = _decode(stdout_reader.result())
-        stderr_text = _decode(stderr_reader.result())
         try:
             proc.stdout.close()
+        except Exception:
+            pass
+        try:
             proc.stderr.close()
         except Exception:
             pass
-        # Re-raise the same interrupt (preserving its identity/traceback)
-        # after cleanup, with the cancelled CommandResult attached so
-        # callers/tests can inspect what was captured before the kill.
-        interrupt.command_result = CommandResult(None, stdout_text, stderr_text, "cancelled")
-        raise
 
-    if budget.overflowed:
-        _kill_process_group(proc)
+    # Authoritative failure decision, taken only now that every reader
+    # thread has fully drained (joined above). A short-lived child can
+    # write past max_bytes and exit before a reader thread gets scheduled
+    # to process the over-budget chunk, racing ahead of the child's exit
+    # signal; budget.overflowed is only trustworthy once draining is done.
+    if cancelled_interrupt is not None:
+        failure = "cancelled"
+    elif budget.overflowed:
         failure = "output-limit"
     elif not triggered:
-        _kill_process_group(proc)
         failure = "timeout"
     else:
-        failure = None  # exited on its own, without overflowing the budget
-
-    _join_all(waiter_thread, stdout_thread, stderr_thread)
-    _reap(proc)  # idempotent; guarantees no zombie even on unexpected paths
+        failure = None
 
     returncode = proc.returncode if failure is None else None
     stdout_text = _decode(stdout_reader.result())
     stderr_text = _decode(stderr_reader.result())
-    try:
-        proc.stdout.close()
-        proc.stderr.close()
-    except Exception:
-        pass
+
+    if cancelled_interrupt is not None:
+        # Re-raise the same interrupt (preserving its identity/traceback)
+        # after cleanup, with the cancelled CommandResult attached so
+        # callers/tests can inspect what was captured before the kill.
+        cancelled_interrupt.command_result = CommandResult(None, stdout_text, stderr_text, "cancelled")
+        raise cancelled_interrupt
 
     return CommandResult(returncode, stdout_text, stderr_text, failure)

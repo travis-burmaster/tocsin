@@ -1,5 +1,6 @@
 import json
 import os
+import signal
 import subprocess
 import sys
 import time
@@ -76,6 +77,35 @@ def test_output_limit_returns_captured_prefix():
 
 
 @posix_only
+def test_output_limit_detected_even_when_reader_lags_behind_fast_exit(monkeypatch):
+    """Regression test for a race in the overflow/exit decision.
+
+    A short-lived child can write past max_bytes and exit before a reader
+    thread gets scheduled to process the over-budget chunk. If the
+    failure decision is made right when the wait for the child's exit
+    returns (instead of after the reader threads have fully drained), the
+    run is wrongly reported as a clean 'complete' run with silently
+    truncated output. We force this race deterministically by delaying a
+    reader thread's processing of each chunk it reads, so the waiter
+    thread's "child exited" signal always arrives first.
+    """
+    def delayed_after_read():
+        time.sleep(0.2)
+
+    monkeypatch.setattr(runner, '_after_read', delayed_after_read)
+
+    result = run_command(
+        [sys.executable, '-c', "import sys; sys.stdout.write('A' * 4096)"],
+        timeout=5,
+        max_bytes=1024,
+    )
+
+    assert result.failure == 'output-limit'
+    assert result.stdout != ''
+    assert len(result.stdout) <= 1024
+
+
+@posix_only
 def test_literal_spaces_and_leading_dashes_are_preserved():
     args = ["hello world", "--not-an-option", "-x"]
     result = run_command(
@@ -113,6 +143,21 @@ def test_permission_denied_on_exec_is_explicit(tmp_path):
 
 
 @posix_only
+def test_invalid_executable_contents_map_to_missing(tmp_path):
+    # Exec bit set, but the contents are neither a valid binary nor a
+    # shebang script: the OS refuses to exec it (ENOEXEC), which is a
+    # plain OSError distinct from FileNotFoundError/PermissionError.
+    bad = tmp_path / "not_a_real_binary"
+    bad.write_bytes(b"\x00\x01\x02\x03not a real executable")
+    bad.chmod(0o755)
+
+    result = run_command([str(bad)], timeout=1, max_bytes=1024)
+
+    assert result.failure == 'missing'
+    assert result.stderr != ''  # errno/strerror text reaches the report
+
+
+@posix_only
 def test_cancellation_kills_and_reaps_child(monkeypatch):
     """Simulate KeyboardInterrupt arriving while run_command is waiting.
 
@@ -131,30 +176,34 @@ def test_cancellation_kills_and_reaps_child(monkeypatch):
 
     monkeypatch.setattr(runner.subprocess, "Popen", spy_popen)
 
-    calls = {"n": 0}
-    real_wait_for_event = runner._wait_for_event
-
     def fake_wait_for_event(event, timeout):
-        calls["n"] += 1
-        if calls["n"] == 1:
-            raise KeyboardInterrupt
-        return real_wait_for_event(event, timeout)
+        # run_command makes exactly one call to _wait_for_event per
+        # invocation, so this always raises -- there is no second call to
+        # fall back to a real wait for.
+        raise KeyboardInterrupt
 
     monkeypatch.setattr(runner, "_wait_for_event", fake_wait_for_event)
 
+    start = time.monotonic()
     with pytest.raises(KeyboardInterrupt) as exc_info:
         run_command(
             [sys.executable, '-c', 'import time; time.sleep(5)'],
             timeout=5,
             max_bytes=1024,
         )
+    elapsed = time.monotonic() - start
 
     assert exc_info.value.command_result.failure == 'cancelled'
+    # Proves the child was actually killed rather than left to run out its
+    # 5s sleep: cleanup returns almost immediately, and the process was
+    # terminated by SIGKILL rather than exiting on its own.
+    assert elapsed < 3
     assert len(created) == 1
     proc = created[0]
     # poll() returns a non-None exit status only once the child has been
     # reaped; a zombie or still-running process would show None here.
     assert proc.poll() is not None
+    assert proc.returncode == -signal.SIGKILL
 
 
 def test_windows_returns_unavailable_without_starting_anything(monkeypatch):
