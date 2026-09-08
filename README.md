@@ -27,9 +27,14 @@ These commands describe the intended interface; they are not runnable yet.
 tocsin doctor
 tocsin scan --brew --kb /path/to/oss-security-kb
 tocsin scan --files /path/to/selected-folder
+tocsin scan --project /path/to/project --osv-database /path/to/osv-db
 tocsin scan --project /path/to/project --online
 tocsin scan --posture --format json --output report.json
 ```
+
+`--kb PATH` is optional for every scope. Without it, package results carry no knowledge-base context and say so. Project scans are offline by default and need a local OSV database via `--osv-database`; `--online` instead queries the OSV service and transmits package names and versions.
+
+Exit codes: 0 means every requested check completed with no actionable findings, 1 means completed with findings, and 2 means at least one check was incomplete or failed. Packages that Tocsin cannot yet assess are listed as unassessed and do not change the exit code.
 
 ## Project documents
 
