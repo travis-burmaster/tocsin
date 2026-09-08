@@ -88,7 +88,7 @@ class CommandResult:
     returncode: int | None
     stdout: str
     stderr: str
-    failure: str | None  # missing, timeout, cancelled, output-limit, permission
+    failure: str | None  # missing, timeout, cancelled, output-limit, permission, unavailable (non-POSIX host)
 
 Runner = Callable[..., CommandResult]  # signature of run_command
 
