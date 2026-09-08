@@ -1,6 +1,6 @@
-# macOS security scanner — initial design
+# Tocsin — initial design
 
-Status: proposed detailed design, following approval of the command-line first scope.
+Status: planning baseline. Command-line first scope and the Tocsin name selected by the owner; macOS first, Linux and Windows planned.
 
 ## Outcome
 
@@ -16,6 +16,10 @@ Build in a separate project. Consume local KB snapshots without modifying the so
 
 Use Python 3.11+ for a small CLI and adapters. No service, privileged helper, runtime LLM, or shell script execution from KB contents. Target macOS 13+ on Apple Silicon and Intel; validate host-specific behavior on the available Mac and label untested architecture coverage.
 
+The application is named Tocsin, with executable `tocsin` and Python package `tocsin`. Keep the common result model, KB reader, advisory normalization, reporting, and orchestration portable. Resolve platform capabilities at runtime through explicit adapters; do not import or invoke macOS-only tools on Linux or Windows. macOS is the only initial supported platform. Linux and Windows adapters are future milestones and must report unsupported until implemented and tested. Python is not assumed to ship with macOS; installation instructions must name the prerequisite.
+
+Future Linux support will need distribution-specific package inventories and advisory matching, preserving epochs and vendor backports. Future Windows support will need installed-software inventory and vendor-specific identifiers and update channels. Package version ranges cannot be transferred across platforms. Portability of a shared engine does not establish tested platform support.
+
 Modules have distinct responsibilities:
 
 - CLI: parse explicit scan scopes and output options.
@@ -29,13 +33,13 @@ Modules have distinct responsibilities:
 
 ## User flow
 
-Proposed executable name: `macscan`.
+Executable name: `tocsin`.
 
-1. `macscan doctor` reports operating system, available engines, versions, signature metadata, and KB readability; installs nothing.
-2. `macscan scan --brew --kb PATH` inventories Homebrew and attaches KB context and supported advisory checks.
-3. `macscan scan --project PATH --kb PATH` checks supported dependency manifests using OSV-Scanner.
-4. `macscan scan --files PATH --kb PATH` runs an on-demand malware scan of that explicit path.
-5. `macscan scan --posture` checks macOS configuration and startup entries.
+1. `tocsin doctor` reports operating system, available engines, versions, signature metadata, and KB readability; installs nothing.
+2. `tocsin scan --brew --kb PATH` inventories Homebrew and attaches KB context and supported advisory checks.
+3. `tocsin scan --project PATH --kb PATH` checks supported dependency manifests using OSV-Scanner.
+4. `tocsin scan --files PATH --kb PATH` runs an on-demand malware scan of that explicit path.
+5. `tocsin scan --posture` checks macOS configuration and startup entries.
 6. Scope flags can be combined. `--format json --output PATH` writes a machine-readable report; default output is readable terminal text. Existing files are not overwritten without an explicit overwrite flag.
 
 No scan scope defaults to the whole home directory or disk. Installation and updating are documented manual steps for the first release. The KB is provided with an explicit local path. Default operations are local; project advisory lookups require `--online`, with help text explaining that package names and versions can be transmitted to advisory services. Offline dependency checks require a supported preloaded local advisory database; otherwise the adapter reports unavailable. File contents and reports are not uploaded by this application.
@@ -72,7 +76,7 @@ Keep scan evidence sufficient for review without collecting file contents. Store
 3. Add ClamAV and macOS posture adapters, preserving partial outcomes.
 4. Verify fixtures and available live integrations; deliver install instructions, coverage matrix, sample reports, and local source project.
 
-A later project can add a native desktop interface, broader formula/application mappings, controlled quarantine, and Endpoint Security integration. These do not block the on-demand first release. No repository publishing or full-device scan is part of this design phase.
+A later project can add a native desktop interface, broader formula/application mappings, controlled quarantine, and Endpoint Security integration. These do not block the on-demand first release. The planning documents will be saved in the private travis-burmaster/tocsin repository. Full-device scans and implementation are outside this documentation delivery.
 
 ## References
 
