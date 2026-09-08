@@ -7,9 +7,12 @@ import os
 import platform
 import shutil
 import sys
+from pathlib import Path
 
+from tocsin.kb import kb_snapshot
 from tocsin.models import CheckResult, Runner
 from tocsin.platforms import supported_capabilities
+from tocsin.platforms.macos import inventory_brew
 from tocsin.report import exit_code, render_json, render_text
 from tocsin.runner import run_command
 
@@ -33,10 +36,11 @@ def _build_parser() -> argparse.ArgumentParser:
     ))
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser(
+    doctor = subparsers.add_parser(
         "doctor",
         help="Report host platform, Python version, and engine availability.",
     )
+    doctor.add_argument("--kb", metavar="PATH", help="Report readability of a local knowledge-base checkout.")
 
     scan = subparsers.add_parser("scan", help="Run one or more scan scopes.")
     scan.add_argument("--brew", action="store_true", help="Inventory Homebrew packages and posture.")
@@ -103,7 +107,7 @@ def _report_engine(name: str, runner: Runner = run_command) -> str:
     return _first_line(result.stdout or result.stderr)
 
 
-def _run_doctor(*, runner: Runner = run_command) -> int:
+def _run_doctor(*, kb: str | None = None, runner: Runner = run_command) -> int:
     system = platform.system()
     print(f"platform: {system} ({platform.machine()})")
     print(f"python: {platform.python_version()}")
@@ -113,6 +117,14 @@ def _run_doctor(*, runner: Runner = run_command) -> int:
 
     for name in _ENGINE_EXECUTABLES:
         print(f"{name}: {_report_engine(name, runner=runner)}")
+
+    if kb is not None:
+        kb_root = Path(kb)
+        exists = kb_root.exists()
+        print(f"kb: {kb_root} ({'found' if exists else 'not found'})")
+        if exists:
+            snapshot = kb_snapshot(kb_root)
+            print(f"kb commit: {snapshot.get('commit')}")
 
     return 0
 
@@ -142,16 +154,19 @@ def _run_scan(args: argparse.Namespace) -> int:
             return f"{scope} is not supported on this platform ({system})"
         return f"the {scope} adapter is not integrated yet"
 
-    results: list[CheckResult] = [
-        CheckResult(
+    results: list[CheckResult] = []
+    for scope in requested_scopes:
+        if scope == "brew" and scope in capabilities:
+            kb_root = Path(args.kb) if args.kb else None
+            results.append(inventory_brew(kb_root=kb_root))
+            continue
+        results.append(CheckResult(
             name=scope,
             completion="unavailable",
             findings=(),
             errors=(_unavailable_reason(scope),),
             metadata={},
-        )
-        for scope in requested_scopes
-    ]
+        ))
 
     context = {
         "generated_at": None,
@@ -188,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
         return int(code)
 
     if args.command == "doctor":
-        return _run_doctor()
+        return _run_doctor(kb=args.kb)
     if args.command == "scan":
         return _run_scan(args)
 

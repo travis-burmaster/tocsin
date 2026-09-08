@@ -1,0 +1,68 @@
+{
+  "casks": [
+    {
+      "full_token": "drawio",
+      "installed": "30.3.14",
+      "name": [
+        "draw.io Desktop"
+      ],
+      "tap": "homebrew/cask",
+      "token": "drawio",
+      "version": "31.3.2"
+    }
+  ],
+  "formulae": [
+    {
+      "full_name": "ca-certificates",
+      "installed": [
+        {
+          "installed_on_request": false,
+          "version": "2026-05-14"
+        },
+        {
+          "installed_on_request": false,
+          "version": "2026-07-16"
+        }
+      ],
+      "name": "ca-certificates",
+      "revision": 0,
+      "tap": "homebrew/core"
+    },
+    {
+      "full_name": "git",
+      "installed": [
+        {
+          "installed_on_request": true,
+          "version": "2.53.0_1"
+        }
+      ],
+      "name": "git",
+      "revision": 0,
+      "tap": "homebrew/core"
+    },
+    {
+      "full_name": "openssl@3",
+      "installed": [
+        {
+          "installed_on_request": false,
+          "version": "3.6.3"
+        }
+      ],
+      "name": "openssl@3",
+      "revision": 0,
+      "tap": "homebrew/core"
+    },
+    {
+      "full_name": "hashicorp/tap/terraform",
+      "installed": [
+        {
+          "installed_on_request": true,
+          "version": "1.15.5"
+        }
+      ],
+      "name": "terraform",
+      "revision": 0,
+      "tap": "hashicorp/tap"
+    }
+  ]
+}

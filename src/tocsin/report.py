@@ -88,6 +88,28 @@ def render_json(results: list[CheckResult], context: dict[str, object]) -> str:
     return json.dumps(payload, indent=2) + "\n"
 
 
+def _coverage_line(metadata: dict[str, object]) -> str | None:
+    """Build a compact 'coverage: ...' summary line, or None if there's nothing to show.
+
+    Metadata is otherwise invisible in the text report; this surfaces the
+    two facts a reader most often wants without restructuring the
+    renderer: assessed/unassessed counts and the KB commit in use.
+    """
+    if not isinstance(metadata, dict):
+        return None
+    parts: list[str] = []
+    coverage = metadata.get('coverage')
+    if isinstance(coverage, dict):
+        parts.append(f"assessed={coverage.get('assessed')} unassessed={coverage.get('unassessed')}")
+    kb_info = metadata.get('kb')
+    if isinstance(kb_info, dict) and 'commit' in kb_info:
+        commit = kb_info.get('commit')
+        parts.append(f"kb_commit={_escape_control_chars(commit) if commit else 'none'}")
+    if not parts:
+        return None
+    return "coverage: " + ", ".join(parts)
+
+
 def render_text(results: list[CheckResult], context: dict[str, object]) -> str:
     """Render results as a human-readable report, one section per check."""
     lines: list[str] = []
@@ -111,6 +133,9 @@ def render_text(results: list[CheckResult], context: dict[str, object]) -> str:
             lines.append(f"      action: {_escape_control_chars(finding.action)}")
             for evidence in finding.evidence:
                 lines.append(f"      evidence: {_escape_control_chars(evidence)}")
+        coverage_line = _coverage_line(result.metadata)
+        if coverage_line:
+            lines.append(f"  {coverage_line}")
         lines.append("")
 
     return "\n".join(lines).rstrip("\n") + "\n"

@@ -1,5 +1,9 @@
 import platform
+import shutil
 import stat
+from pathlib import Path
+
+import pytest
 
 from tocsin.cli import main
 
@@ -44,14 +48,17 @@ def test_existing_output_replaced_with_overwrite(tmp_path):
 
 
 def test_doctor_reports_platform_python_and_capabilities(capsys):
+    from tocsin.platforms import supported_capabilities
+
     code = main(['doctor'])
 
     assert code == 0
     out = capsys.readouterr().out
     assert f"platform: {platform.system()}" in out
     assert "python:" in out
-    # No adapter is integrated yet in this task, on any platform.
-    assert "capabilities: none integrated yet" in out
+    capabilities = supported_capabilities(platform.system())
+    expected = ', '.join(sorted(capabilities)) if capabilities else 'none integrated yet'
+    assert f"capabilities: {expected}" in out
 
 
 def test_doctor_discovers_known_engines_without_installing(capsys):
@@ -63,9 +70,47 @@ def test_doctor_discovers_known_engines_without_installing(capsys):
         assert f"{name}: " in out
 
 
+def test_doctor_reports_kb_readability_and_commit(capsys):
+    kb_root = Path(__file__).parent / 'fixtures' / 'kb'
+
+    code = main(['doctor', '--kb', str(kb_root)])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert f"kb: {kb_root} (found)" in out
+    assert "kb commit:" in out
+
+
+def test_doctor_reports_missing_kb_path(tmp_path, capsys):
+    missing = tmp_path / 'nowhere'
+
+    code = main(['doctor', '--kb', str(missing)])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert f"kb: {missing} (not found)" in out
+
+
+def test_scan_brew_with_kb_fixture_is_complete_and_unassessed(capsys):
+    if shutil.which('brew') is None:
+        pytest.skip('brew not installed on this host')
+
+    kb_root = Path(__file__).parent / 'fixtures' / 'kb'
+
+    code = main(['scan', '--brew', '--kb', str(kb_root)])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert '== brew [complete] ==' in out
+    assert 'coverage:' in out
+
+
 def test_scan_reports_unsupported_scope_explicitly(capsys):
-    code = main(['scan', '--brew'])
+    # --posture has no adapter on any platform yet (Task 6 adds it), so this
+    # stays a clean "unsupported"/"not integrated" signal regardless of host.
+    code = main(['scan', '--posture'])
 
     assert code == 2
     out = capsys.readouterr().out
-    assert "brew is not supported on this platform" in out
+    assert "posture" in out
+    assert "not supported on this platform" in out or "not integrated yet" in out

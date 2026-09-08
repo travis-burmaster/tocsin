@@ -69,6 +69,41 @@ def test_json_report_round_trip():
     assert payload['results'][0]['metadata'] == {'coverage': {'assessed': 1, 'unassessed': 1}}
 
 
+def test_text_report_shows_coverage_and_kb_commit():
+    finding = Finding('package', 'openssl@3 3.3.0', 'unassessed', 'unknown',
+                       'high', (), 'no reviewed advisory adapter',
+                       '2026-09-08T00:00:00Z')
+    result = CheckResult('brew', 'complete', (finding,), (), {
+        'coverage': {'assessed': 0, 'unassessed': 1},
+        'kb': {'commit': 'a' * 40, 'dirty': None, 'root': '/kb'},
+    })
+
+    text = render_text([result], {'requested_scopes': ['brew']})
+
+    assert 'coverage: assessed=0 unassessed=1' in text
+    assert f"kb_commit={'a' * 40}" in text
+
+
+def test_text_report_coverage_line_handles_missing_kb_commit():
+    result = CheckResult('brew', 'complete', (), (), {
+        'coverage': {'assessed': 0, 'unassessed': 0},
+        'kb': {'status': 'unavailable', 'reason': 'no --kb path supplied'},
+    })
+
+    text = render_text([result], {'requested_scopes': ['brew']})
+
+    assert 'coverage: assessed=0 unassessed=0' in text
+    assert 'kb_commit' not in text
+
+
+def test_text_report_omits_coverage_line_when_no_metadata():
+    result = CheckResult('clamav', 'unavailable', (), ('engine missing',), {})
+
+    text = render_text([result], {'requested_scopes': ['files']})
+
+    assert 'coverage:' not in text
+
+
 def test_control_characters_escaped_in_text_report():
     finding = Finding('malware', 'evil\x1b[31mname.bin', 'detected', 'critical',
                        'high', ('trigger:\x07bell',), 'quarantine\nand review',
