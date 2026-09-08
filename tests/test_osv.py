@@ -18,6 +18,7 @@ MALFORMED_JSON = (FIXTURES / 'malformed.json').read_text()
 WRONG_SCHEMA_JSON = (FIXTURES / 'wrong_schema.json').read_text()
 VERSION_OUTPUT = (FIXTURES / 'version.txt').read_text()
 STDERR_NO_DB_PYPI = (FIXTURES / 'stderr_no_offline_db_pypi.txt').read_text()
+STDERR_EXTRACTION_ERROR = (FIXTURES / 'stderr_extraction_error.txt').read_text()
 
 OSV_PATH = '/opt/homebrew/bin/osv-scanner'
 
@@ -485,6 +486,253 @@ def test_kb_unsupported_ecosystem_is_unavailable_with_reason(monkeypatch, tmp_pa
     assert 'Bazaar' in kb_entry['reason']
     assert result.findings[0].severity == 'unknown'
     assert result.findings[0].action == 'review advisory'
+
+
+# --- hardening: hostile/malformed nested JSON must never raise -------------
+
+def _hostile_payload(*, vuln_overrides=None, group_overrides=None):
+    vuln = {'id': 'VULN-1', 'aliases': [], 'affected': [], 'references': []}
+    if vuln_overrides:
+        vuln.update(vuln_overrides)
+    group = {'ids': ['VULN-1'], 'aliases': ['VULN-1'], 'max_severity': '5.0'}
+    if group_overrides:
+        group.update(group_overrides)
+    return json.dumps({
+        'results': [{
+            'source': {'path': '/proj/requirements.txt', 'type': 'lockfile'},
+            'packages': [{
+                'package': {'name': 'pkg', 'version': '1.0', 'ecosystem': 'PyPI'},
+                'groups': [group],
+                'vulnerabilities': [vuln],
+            }],
+        }],
+        'experimental_config': {},
+    })
+
+
+@pytest.mark.parametrize('payload,expected_completion', [
+    (_hostile_payload(vuln_overrides={'id': ['X']}), 'partial'),
+    (_hostile_payload(group_overrides={'ids': 5}), 'partial'),
+    (_hostile_payload(group_overrides={'aliases': [['y']]}), 'partial'),
+    (_hostile_payload(vuln_overrides={'references': 7}), 'partial'),
+    (_hostile_payload(vuln_overrides={'affected': 3}), 'partial'),
+    (_hostile_payload(vuln_overrides={'affected': [{'package': {'name': 'pkg', 'ecosystem': 'PyPI'}, 'ranges': 3}]}), 'partial'),
+])
+def test_normalize_hostile_nested_shapes_never_raise(payload, expected_completion):
+    result = normalize_osv(payload)  # must not raise
+    assert result.completion == expected_completion
+    assert result.errors  # the malformed entry is named somewhere in errors
+
+
+def test_normalize_catch_all_wraps_unexpected_exception(monkeypatch):
+    def boom(*args, **kwargs):
+        raise RuntimeError('boom from a shape the type-guards did not anticipate')
+
+    monkeypatch.setattr(osv_module, '_package_findings', boom)
+
+    result = normalize_osv(FINDINGS_JSON)
+
+    assert result.completion == 'error'
+    assert 'boom' in result.errors[0]
+
+
+def test_scan_hostile_payload_never_raises_and_cli_exit_is_sane(monkeypatch, tmp_path):
+    # A hostile engine payload must never produce a bare traceback/exit 1
+    # (the same exit code as "complete with findings") at the scan_project
+    # or CLI layer either.
+    _fake_which(monkeypatch)
+    payload = _hostile_payload(vuln_overrides={'id': ['X']})
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    result = scan_project(tmp_path, online=True, database=None, runner=_runner(scan=scan))
+
+    assert result.completion == 'partial'
+    assert exit_code([result]) == 2
+
+
+# --- a vulnerabilities-bearing package with no groups must not read clean --
+
+def test_package_with_vulnerabilities_but_no_groups_synthesizes_findings():
+    payload = json.dumps({
+        'results': [{
+            'source': {'path': '/proj/requirements.txt', 'type': 'lockfile'},
+            'packages': [{
+                'package': {'name': 'pkg', 'version': '1.0', 'ecosystem': 'PyPI'},
+                'groups': [],
+                'vulnerabilities': [{
+                    'id': 'VULN-1',
+                    'aliases': ['CVE-2020-1'],
+                    'affected': [{
+                        'package': {'name': 'pkg', 'ecosystem': 'PyPI'},
+                        'ranges': [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}, {'fixed': '2.0'}]}],
+                    }],
+                    'references': [{'type': 'WEB', 'url': 'https://example.com/advisory'}],
+                }],
+            }],
+        }],
+        'experimental_config': {},
+    })
+
+    result = normalize_osv(payload)
+
+    assert result.completion == 'partial'  # missing groups is itself a noted anomaly
+    assert len(result.findings) == 1
+    finding = result.findings[0]
+    assert finding.status == 'detected'
+    assert finding.subject == 'pkg 1.0 (PyPI)'
+    assert 'VULN-1' in finding.evidence
+    assert 'CVE-2020-1' in finding.evidence
+    assert finding.action == 'upgrade to 2.0'
+    assert any('groups' in e for e in result.errors)
+
+
+def test_package_with_vulnerabilities_and_missing_groups_is_never_exit_0(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+    payload = json.dumps({
+        'results': [{
+            'source': {'path': '/proj/requirements.txt', 'type': 'lockfile'},
+            'packages': [{
+                'package': {'name': 'pkg', 'version': '1.0', 'ecosystem': 'PyPI'},
+                'groups': [],
+                'vulnerabilities': [{'id': 'VULN-1', 'aliases': [], 'affected': [], 'references': []}],
+            }],
+        }],
+        'experimental_config': {},
+    })
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    result = scan_project(tmp_path, online=True, database=None, runner=_runner(scan=scan))
+
+    assert len(result.findings) == 1
+    assert result.findings[0].status == 'detected'
+    # 'partial' (missing "groups" is itself a noted data-quality anomaly),
+    # not 'complete' -- either way this must never be exit 0, which is the
+    # bug being fixed here: a real detection silently reading as clean.
+    assert exit_code([result]) != 0
+
+
+# --- unreadable --kb root must match Task 3 (inventory_brew) exactly -------
+
+def test_unreadable_kb_root_matches_inventory_brew_behavior(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+    missing_kb = tmp_path / 'nope'  # never created
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, FINDINGS_JSON, '', None)
+
+    result = scan_project(tmp_path, online=True, database=None, kb_root=missing_kb, runner=_runner(scan=scan))
+
+    assert result.completion == 'partial'
+    assert result.errors and str(missing_kb) in result.errors[0]
+    assert result.metadata['kb']['status'] == 'unreadable'
+    for kb_entry in result.metadata['packages_kb'].values():
+        assert kb_entry == {'status': 'unavailable', 'reason': result.metadata['kb']['reason']}
+    # Findings still get built; only KB context could not be attached.
+    assert len(result.findings) == 4
+
+
+def test_unreadable_kb_root_never_calls_read_kb(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+    missing_kb = tmp_path / 'nope'
+
+    def _forbidden_read_kb(*args, **kwargs):
+        raise AssertionError('read_kb must not be called when the --kb root is unreadable')
+
+    monkeypatch.setattr(osv_module, 'read_kb', _forbidden_read_kb)
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, FINDINGS_JSON, '', None)
+
+    result = scan_project(tmp_path, online=True, database=None, kb_root=missing_kb, runner=_runner(scan=scan))
+
+    assert result.completion == 'partial'
+
+
+def test_unreadable_kb_root_with_zero_manifests_is_still_partial(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+    missing_kb = tmp_path / 'nope'
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, EMPTY_JSON, '', None)
+
+    result = scan_project(tmp_path, online=True, database=None, kb_root=missing_kb, runner=_runner(scan=scan))
+
+    assert result.completion == 'partial'
+    assert len(result.findings) == 1
+    assert result.findings[0].status == 'unassessed'
+
+
+# --- per-manifest extraction failures (controller item 4) -------------------
+
+def test_scan_rc1_with_extraction_failure_is_partial_with_error_finding(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(1, FINDINGS_JSON, STDERR_EXTRACTION_ERROR, None)
+
+    result = scan_project(tmp_path, online=True, database=None, runner=_runner(scan=scan))
+
+    assert result.completion == 'partial'
+    detected = [f for f in result.findings if f.status == 'detected']
+    errored = [f for f in result.findings if f.status == 'error']
+    assert len(detected) == 4  # all findings from the manifest that DID parse are kept
+    assert len(errored) == 1
+    assert 'package-lock.json' in errored[0].subject
+    assert any('extraction' in e.lower() for e in result.errors)
+
+
+def test_scan_rc127_empty_results_with_extraction_error_stays_error(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+    # No vulnerabilities anywhere -> results is empty even though stderr
+    # names an extraction failure; this must keep the current mapping.
+    stderr = STDERR_EXTRACTION_ERROR + '\nNo package sources found\n'
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(127, EMPTY_JSON, stderr, None)
+
+    result = scan_project(tmp_path, online=True, database=None, runner=_runner(scan=scan))
+
+    assert result.completion == 'error'
+
+
+def test_scan_rc127_with_nonempty_results_is_partial_defensive(monkeypatch, tmp_path):
+    # Not observed against the real binary (docs/evidence/osv-contract.md
+    # records rc=127 only ever pairing with empty results there), but
+    # implemented defensively per the brief's exit-code table.
+    _fake_which(monkeypatch)
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(127, FINDINGS_JSON, STDERR_EXTRACTION_ERROR, None)
+
+    result = scan_project(tmp_path, online=True, database=None, runner=_runner(scan=scan))
+
+    assert result.completion == 'partial'
+    assert any(f.status == 'detected' for f in result.findings)
+    assert any(f.status == 'error' for f in result.findings)
+
+
+# --- online mode must never leak a database into metadata (item 6) ---------
+
+def test_online_mode_ignores_any_supplied_database_in_metadata(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+    unused_database = tmp_path / 'db'
+    unused_database.mkdir()
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        assert extra_env is None
+        assert '--offline' not in argv
+        return CommandResult(0, EMPTY_JSON, '', None)
+
+    result = scan_project(
+        tmp_path, online=True, database=unused_database, runner=_runner(scan=scan),
+    )
+
+    assert result.metadata['database'] is None
+    assert result.metadata['mode'] == 'online'
 
 
 # --- optional local integration: the real osv-scanner v2.5.1 binary --------

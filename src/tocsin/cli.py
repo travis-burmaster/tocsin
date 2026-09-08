@@ -174,10 +174,20 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
             results.append(inventory_brew(kb_root=kb_root, runner=runner))
             continue
         if scope == "project" and scope in capabilities:
+            project_path = Path(args.project)
+            if not project_path.is_dir():
+                results.append(CheckResult(
+                    name="project",
+                    completion="error",
+                    findings=(),
+                    errors=(f"--project path does not exist or is not a directory: {project_path}",),
+                    metadata={},
+                ))
+                continue
             kb_root = Path(args.kb) if args.kb else None
             database = Path(args.osv_database) if args.osv_database else None
             results.append(scan_project(
-                Path(args.project).resolve(),
+                project_path.resolve(),
                 online=args.online,
                 database=database,
                 kb_root=kb_root,

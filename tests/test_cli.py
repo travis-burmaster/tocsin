@@ -153,6 +153,36 @@ def test_scan_project_offline_without_database_is_unavailable(monkeypatch, capsy
     assert '--osv-database' in out
 
 
+def test_scan_project_nonexistent_path_is_error_without_calling_adapter(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(osv_module.shutil, 'which', lambda name: '/opt/homebrew/bin/osv-scanner')
+    missing = tmp_path / 'does-not-exist'
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError('runner must not be called for a nonexistent --project path')
+
+    code = main(['scan', '--project', str(missing), '--online'], runner=_forbidden)
+
+    assert code == 2
+    out = capsys.readouterr().out
+    assert '== project [error] ==' in out
+    assert str(missing) in out
+
+
+def test_scan_project_path_that_is_a_file_is_error(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(osv_module.shutil, 'which', lambda name: '/opt/homebrew/bin/osv-scanner')
+    a_file = tmp_path / 'not-a-directory.txt'
+    a_file.write_text('oops')
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError('runner must not be called for a --project path that is a file')
+
+    code = main(['scan', '--project', str(a_file), '--online'], runner=_forbidden)
+
+    assert code == 2
+    out = capsys.readouterr().out
+    assert '== project [error] ==' in out
+
+
 def test_scan_reports_unsupported_scope_explicitly(capsys):
     # --posture has no adapter on any platform yet (Task 6 adds it), so this
     # stays a clean "unsupported"/"not integrated" signal regardless of host.

@@ -17,6 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from tocsin.kb import kb_metadata as _kb_metadata
+from tocsin.kb import kb_unreadable_reason as _kb_unreadable_reason
 from tocsin.kb import read_kb
 from tocsin.models import CheckResult, Finding, Package, Runner
 from tocsin.runner import run_command
@@ -241,7 +242,7 @@ def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command)
         )
 
     kb_metadata = _kb_metadata(kb_root)
-    kb_unreadable_reason = kb_metadata.get('reason') if kb_metadata.get('status') == 'unreadable' else None
+    kb_unreadable_reason = _kb_unreadable_reason(kb_metadata)
 
     findings: list[Finding] = []
     serialized_packages: list[dict[str, object]] = []

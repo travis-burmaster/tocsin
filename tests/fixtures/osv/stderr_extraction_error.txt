@@ -1,0 +1,6 @@
+Scanning dir /path/to/project
+Starting filesystem walk for root: /
+Scanned /path/to/project/requirements.txt file and found 1 package
+End status: 1 dirs visited, 3 inodes visited, 2 Extract calls, 279.125µs elapsed, 279µs wall time
+Loaded PyPI local db from /path/to/db/osv-scalibr/PyPI/all.zip
+Error during extraction: (extracting as javascript/packagelockjson) path/to/project/package-lock.json: could not extract: invalid character 'n' looking for beginning of object key string

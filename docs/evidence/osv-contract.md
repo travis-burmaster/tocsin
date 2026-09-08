@@ -100,9 +100,9 @@ runs of the tested binary:
 | rc | Meaning (source) | Tocsin completion |
 |---|---|---|
 | 0 | success / no vulnerabilities | `complete` (or `complete` + one `unassessed` "no manifests" finding if `results` was null/empty with zero packages) |
-| 1 | `ErrVulnerabilitiesFound` | `complete`, with `detected` findings |
-| 127 | general error (log handler `HasErrored`) | `unavailable` if stderr contains "no offline version of the OSV database is available" (names the ecosystem(s), parsed from `could not load db for <Ecosystem> ecosystem`); otherwise `error` |
-| 128 | `ErrNoPackagesFound` ("No package sources found") | `complete` + one `unassessed` "no manifests" finding, `metadata['manifests'] == 0` |
+| 1 | `ErrVulnerabilitiesFound` | `complete`, with `detected` findings -- `partial` instead if stderr also names a per-manifest extraction failure (see below) or if a supplied `--kb` root is unreadable |
+| 127 | general error (log handler `HasErrored`) | `unavailable` if stderr contains "no offline version of the OSV database is available" (names the ecosystem(s), parsed from `could not load db for <Ecosystem> ecosystem`); `partial` if `results` is non-empty (handled identically to rc 0/1 above -- not observed against the real binary, see below); otherwise `error` |
+| 128 | `ErrNoPackagesFound` ("No package sources found") | `complete` + one `unassessed` "no manifests" finding, `metadata['manifests'] == 0` (`partial` instead if a supplied `--kb` root is unreadable) |
 | 129 | `ErrAPIFailed` | `error` ("OSV API failed") |
 | 130 | invalid config | `error` ("invalid osv-scanner config") |
 | anything else | -- | `error` |
@@ -115,7 +115,64 @@ failures (before any rc exists) map like Task 3's Homebrew adapter:
 
 Malformed or schema-mismatched JSON with rc 0 or 1 is always `error`,
 never `complete` or `partial` -- a nonstandard payload cannot be trusted
-just because the process exited cleanly.
+just because the process exited cleanly. Any nested value inside a
+parseable payload that isn't the expected type (e.g. an `id` that's a
+list instead of a string) is individually skipped or coerced rather than
+raising; the specific malformed entry is named in `errors` and the run is
+downgraded to `partial`. A catch-all wraps the whole parse, so any shape
+those per-field guards miss still comes back as `error` with the
+exception text instead of an uncaught exception reaching the CLI.
+
+### Per-manifest extraction failures (one broken manifest among several)
+
+A single corrupt manifest does not fail the whole run: osv-scanner logs
+one `Error during extraction: ...` line to stderr per broken manifest and
+continues with the others. Confirmed against the real v2.5.1 binary with a
+`requirements.txt` (`requests==2.19.0`) alongside a corrupt
+`package-lock.json` (literal contents `{not json`), offline, PyPI-only DB:
+
+```
+$ osv-scanner scan source --recursive --offline --no-resolve --format json <dir>
+rc=1
+stdout: {"results": [{"source": {"path": ".../requirements.txt", ...}, "packages": [...]}], ...}
+       (1 result, the requirements.txt manifest with its usual requests findings;
+        package-lock.json does not appear anywhere in `results`)
+stderr (relevant line):
+Error during extraction: (extracting as javascript/packagelockjson) path/to/package-lock.json:
+could not extract: invalid character 'n' looking for beginning of object key string
+```
+
+Two more variants were run to map the rc/results relationship precisely:
+
+- Same corrupt `package-lock.json` alone (no other manifest): rc=**128**,
+  **empty** stdout (not even a JSON object), stderr has the same
+  `Error during extraction` line plus `No package sources found,
+  --help for usage information.`.
+- The corrupt `package-lock.json` alongside a **clean** `requirements.txt`
+  (`requests==2.33.0`, no known vulnerabilities in the test DB): rc=**127**,
+  stdout `{"results": [], ...}` (**empty** -- the clean manifest is not
+  listed at all, matching the general rule that `results` only lists
+  manifests with actual findings), stderr has the same extraction-error
+  line with no other cause.
+
+**Conclusion, and where this adapter's spec deviates from the original
+hypothesis:** the exit-code priority in this binary is `ErrVulnerabilitiesFound`
+(1) over the general `HasErrored` (127) -- if vulnerabilities are found
+*anywhere* in the run, rc is 1 even when another manifest also failed to
+extract; rc=127 is only reached when nothing found a vulnerability, and in
+that case `results` was empty in every configuration tried here. So "an rc
+127 run with non-empty results" was not reproducible against this binary;
+the adapter still implements that exact case defensively (falls through
+to the same handling as rc 0/1), in case a future release changes this
+priority, but the behaviour that actually matters in practice is: **rc 0
+or 1 with a stderr `Error during extraction` line** downgrades the run to
+`partial`, keeps every finding from the manifest(s) that did parse, and
+adds one `error`-status `Finding` per extraction-failure line (`subject`
+is the manifest filename parsed out of the line when present, else the
+bounded raw line itself; the bounded stderr tail is also recorded in
+`errors`). An rc=127 run with **empty** `results` keeps the original
+mapping unchanged (unavailable/error, per the table above) since there is
+nothing parseable to preserve.
 
 ## Empirical findings (osv-research.md, reproduced against the real binary)
 
@@ -165,3 +222,15 @@ integration test passed:
 ```
 tests/test_osv.py::test_real_osv_scanner_offline_scan_detects_requests_cve PASSED
 ```
+
+**Re-run date: 2026-09-08 (review fix pass).** Re-ran the same integration
+test after the hardening/exit-code fixes described above (`git log` shows
+this as the "fix: harden OSV normalization and align KB handling with
+inventory" commit); same result: `PASSED`, `completion == 'complete'`,
+`detected` findings present, `report.exit_code([result]) == 1`. The
+mixed-manifest (valid + corrupt lockfile) observations in the
+"Per-manifest extraction failures" section above were captured in this
+same pass, directly against the real binary and PyPI-only offline
+database (not via the gated pytest test, since that test only exercises
+the single-manifest case; the mixed-manifest behavior is covered by fake
+runners in `tests/test_osv.py` using the real stderr text captured here).

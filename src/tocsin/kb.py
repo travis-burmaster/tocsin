@@ -353,3 +353,16 @@ def kb_metadata(kb_root: Path | None) -> dict[str, object]:
         'source': _KB_SOURCE,
         'maintainer': _KB_MAINTAINER,
     }
+
+
+def kb_unreadable_reason(metadata: dict[str, object]) -> str | None:
+    """Return why a KB root is unreadable, or None if `metadata` says it's fine.
+
+    `metadata` is the return value of `kb_metadata`. Shared by every
+    adapter that needs to react to an unreadable --kb path the same way:
+    skip per-package KB lookups entirely (no `read_kb` call, and no
+    accidental 'unknown'-from-a-never-readable-root verdict), record the
+    reason in `errors`, and downgrade completion to 'partial' rather than
+    reporting a clean or silently degraded result.
+    """
+    return metadata.get('reason') if metadata.get('status') == 'unreadable' else None
