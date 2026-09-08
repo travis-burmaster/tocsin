@@ -3,6 +3,7 @@ import platform
 import stat
 from pathlib import Path
 
+from tocsin.adapters import osv as osv_module
 from tocsin.cli import main
 from tocsin.models import CommandResult
 from tocsin.platforms import macos
@@ -116,6 +117,40 @@ def test_scan_brew_with_kb_fixture_is_complete_and_unassessed(monkeypatch, capsy
     out = capsys.readouterr().out
     assert '== brew [complete] ==' in out
     assert 'coverage: assessed=0 unassessed=1' in out
+
+
+def test_scan_project_with_fake_runner_online_is_complete(monkeypatch, capsys, tmp_path):
+    # Never hit the real osv-scanner binary: patch the osv adapter's
+    # shutil.which and inject a fake runner all the way through main().
+    monkeypatch.setattr(osv_module.shutil, 'which', lambda name: '/opt/homebrew/bin/osv-scanner')
+    version_output = 'osv-scanner version: 2.5.1\n'
+    empty_json = json.dumps({'results': [], 'experimental_config': {}})
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        if argv[-1] == '--version':
+            return CommandResult(0, version_output, '', None)
+        return CommandResult(0, empty_json, '', None)
+
+    code = main(['scan', '--project', str(tmp_path), '--online'], runner=fake_runner)
+
+    assert code == 0  # complete, only an unassessed finding (not actionable)
+    out = capsys.readouterr().out
+    assert '== project [complete] ==' in out
+    assert 'coverage: assessed=0 unassessed=1' in out
+
+
+def test_scan_project_offline_without_database_is_unavailable(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(osv_module.shutil, 'which', lambda name: '/opt/homebrew/bin/osv-scanner')
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError('runner must not be called when offline and no database is supplied')
+
+    code = main(['scan', '--project', str(tmp_path)], runner=_forbidden)
+
+    assert code == 2
+    out = capsys.readouterr().out
+    assert '== project [unavailable] ==' in out
+    assert '--osv-database' in out
 
 
 def test_scan_reports_unsupported_scope_explicitly(capsys):

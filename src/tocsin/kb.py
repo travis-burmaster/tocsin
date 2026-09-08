@@ -62,6 +62,15 @@ _TABLE_SEPARATOR_RE = re.compile(r'^:?-{2,}:?$')
 
 _KB_SOURCE_REPO = 'https://github.com/travis-burmaster/oss-security-kb'
 
+# Attribution for the OSS Security KB, attached once per report (not per
+# package) in metadata['kb'] whenever a readable KB checkout is in use.
+# Shared by every adapter that reports package-level KB context (Homebrew,
+# OSV) so the attribution block is defined in exactly one place.
+_KB_LICENSE = 'CC BY 4.0'
+_KB_LICENSE_URL = 'https://github.com/travis-burmaster/oss-security-kb/blob/main/LICENSE'
+_KB_SOURCE = 'https://github.com/travis-burmaster/oss-security-kb'
+_KB_MAINTAINER = 'Travis Burmaster'
+
 
 def _page_name(ecosystem: str, name: str) -> str:
     """Resolve a package name to a KB page-name (without directory or extension)."""
@@ -312,3 +321,35 @@ def kb_snapshot(root: Path) -> dict[str, object]:
     """
     root = Path(root)
     return {'commit': _resolve_head(root), 'dirty': None, 'root': str(root)}
+
+
+def kb_metadata(kb_root: Path | None) -> dict[str, object]:
+    """Build the once-per-report metadata['kb'] entry, in a single shape.
+
+    Shared by every adapter that reports package-level KB context:
+    'unavailable' when no --kb was supplied at all; 'unreadable' when a
+    path was supplied but does not exist or is not a directory; else
+    'available', carrying the KB snapshot identity plus attribution
+    (license, source, maintainer) so it is preserved wherever this
+    report ends up, per the KB's attribution requirements.
+    """
+    if kb_root is None:
+        return {'status': 'unavailable', 'reason': 'no --kb path supplied'}
+    kb_root = Path(kb_root)
+    if not kb_root.is_dir():
+        return {
+            'status': 'unreadable',
+            'root': str(kb_root),
+            'reason': f'--kb path does not exist or is not a directory: {kb_root}',
+        }
+    snapshot = kb_snapshot(kb_root)
+    return {
+        'status': 'available',
+        'root': snapshot.get('root'),
+        'commit': snapshot.get('commit'),
+        'dirty': snapshot.get('dirty'),
+        'license': _KB_LICENSE,
+        'license_url': _KB_LICENSE_URL,
+        'source': _KB_SOURCE,
+        'maintainer': _KB_MAINTAINER,
+    }

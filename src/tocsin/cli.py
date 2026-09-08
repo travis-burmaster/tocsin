@@ -9,6 +9,7 @@ import shutil
 import sys
 from pathlib import Path
 
+from tocsin.adapters.osv import scan_project, version_compatibility
 from tocsin.kb import kb_snapshot
 from tocsin.models import CheckResult, Runner
 from tocsin.platforms import supported_capabilities
@@ -56,7 +57,16 @@ def _build_parser() -> argparse.ArgumentParser:
             "be transmitted to advisory services."
         ),
     )
-    scan.add_argument("--osv-database", metavar="PATH", help="Local OSV database for offline dependency checks.")
+    scan.add_argument(
+        "--osv-database",
+        metavar="PATH",
+        help=(
+            "Offline alternative to --online for --project: a local directory "
+            "already populated as OSV-Scanner's OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY "
+            "layout (<PATH>/osv-scalibr/<Ecosystem>/all.zip). Without --online, "
+            "--project requires this."
+        ),
+    )
     scan.add_argument("--format", choices=("text", "json"), default="text", help="Report format (default: text).")
     scan.add_argument("--output", metavar="PATH", help="Write the report to PATH instead of stdout.")
     scan.add_argument("--overwrite", action="store_true", help="Allow replacing an existing --output file.")
@@ -116,7 +126,10 @@ def _run_doctor(*, kb: str | None = None, runner: Runner = run_command) -> int:
     print(f"capabilities: {', '.join(sorted(capabilities)) if capabilities else 'none integrated yet'}")
 
     for name in _ENGINE_EXECUTABLES:
-        print(f"{name}: {_report_engine(name, runner=runner)}")
+        line = _report_engine(name, runner=runner)
+        if name == "osv-scanner" and line.startswith("osv-scanner version:"):
+            line = f"{line} -- {version_compatibility(line)}"
+        print(f"{name}: {line}")
 
     if kb is not None:
         kb_root = Path(kb)
@@ -159,6 +172,17 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
         if scope == "brew" and scope in capabilities:
             kb_root = Path(args.kb) if args.kb else None
             results.append(inventory_brew(kb_root=kb_root, runner=runner))
+            continue
+        if scope == "project" and scope in capabilities:
+            kb_root = Path(args.kb) if args.kb else None
+            database = Path(args.osv_database) if args.osv_database else None
+            results.append(scan_project(
+                Path(args.project).resolve(),
+                online=args.online,
+                database=database,
+                kb_root=kb_root,
+                runner=runner,
+            ))
             continue
         results.append(CheckResult(
             name=scope,

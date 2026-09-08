@@ -1,0 +1,6 @@
+Scanning dir ./proj
+Starting filesystem walk for root: /
+Scanned /path/to/proj/requirements.txt file and found 2 packages
+End status: 1 dirs visited, 2 inodes visited, 1 Extract calls, 157.5µs elapsed, 158µs wall time
+could not load db for PyPI ecosystem: unable to fetch OSV database: no offline version of the OSV database is available
+Error during extraction: (extracting as vulnmatch/osvlocal) unable to fetch OSV database: no offline version of the OSV database is available

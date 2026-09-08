@@ -15,7 +15,7 @@ from __future__ import annotations
 # Adding a capability as its adapter lands is a one-line change to the
 # relevant frozenset below.
 _CAPABILITIES_BY_SYSTEM: dict[str, frozenset[str]] = {
-    "Darwin": frozenset({"brew"}),
+    "Darwin": frozenset({"brew", "project"}),
     "Linux": frozenset(),
     "Windows": frozenset(),
 }
