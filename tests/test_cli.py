@@ -1,3 +1,4 @@
+import platform
 import stat
 
 from tocsin.cli import main
@@ -40,3 +41,31 @@ def test_existing_output_replaced_with_overwrite(tmp_path):
     assert "pre-existing content" not in output.read_text()
     mode = stat.S_IMODE(output.stat().st_mode)
     assert mode == 0o600
+
+
+def test_doctor_reports_platform_python_and_capabilities(capsys):
+    code = main(['doctor'])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert f"platform: {platform.system()}" in out
+    assert "python:" in out
+    # No adapter is integrated yet in this task, on any platform.
+    assert "capabilities: none integrated yet" in out
+
+
+def test_doctor_discovers_known_engines_without_installing(capsys):
+    code = main(['doctor'])
+
+    assert code == 0
+    out = capsys.readouterr().out
+    for name in ("brew", "clamscan", "osv-scanner"):
+        assert f"{name}: " in out
+
+
+def test_scan_reports_unsupported_scope_explicitly(capsys):
+    code = main(['scan', '--brew'])
+
+    assert code == 2
+    out = capsys.readouterr().out
+    assert "brew is not supported on this platform" in out

@@ -5,10 +5,19 @@ from __future__ import annotations
 import argparse
 import os
 import platform
+import shutil
 import sys
 
-from tocsin.models import CheckResult
+from tocsin.models import CheckResult, Runner
+from tocsin.platforms import supported_capabilities
 from tocsin.report import exit_code, render_json, render_text
+from tocsin.runner import run_command
+
+# Engines doctor looks for on PATH, without installing anything. Reported
+# per-tool as "not found", a failure kind, or the first line of its
+# `--version` output. Later tasks pin and validate specific versions; this
+# is discovery only.
+_ENGINE_EXECUTABLES = ("brew", "clamscan", "osv-scanner")
 
 # Scan scopes, in the order they are reported. --brew and --posture are
 # boolean store_true flags; --files and --project take a PATH, where even an
@@ -69,10 +78,42 @@ def _write_output(path: str, content: str, overwrite: bool) -> bool:
     return True
 
 
-def _run_doctor() -> int:
-    print(f"platform: {platform.system()} ({platform.machine()})")
+def _first_line(text: str) -> str:
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped:
+            return stripped
+    return "(no output)"
+
+
+def _report_engine(name: str, runner: Runner = run_command) -> str:
+    """Report one engine's discovery state without installing anything.
+
+    Returns "not found" if the executable is absent from PATH; otherwise
+    runs `<name> --version` through the bounded runner and reports either
+    the failure kind or the first non-blank line of its output. This does
+    not judge version compatibility; later tasks pin versions.
+    """
+    path = shutil.which(name)
+    if path is None:
+        return "not found"
+    result = runner([path, "--version"], timeout=10, max_bytes=65536)
+    if result.failure is not None:
+        return f"error: {result.failure}"
+    return _first_line(result.stdout or result.stderr)
+
+
+def _run_doctor(*, runner: Runner = run_command) -> int:
+    system = platform.system()
+    print(f"platform: {system} ({platform.machine()})")
     print(f"python: {platform.python_version()}")
-    print("engines: none integrated yet")
+
+    capabilities = supported_capabilities(system)
+    print(f"capabilities: {', '.join(sorted(capabilities)) if capabilities else 'none integrated yet'}")
+
+    for name in _ENGINE_EXECUTABLES:
+        print(f"{name}: {_report_engine(name, runner=runner)}")
+
     return 0
 
 
@@ -90,12 +131,23 @@ def _run_scan(args: argparse.Namespace) -> int:
         )
         return 2
 
+    system = platform.system()
+    capabilities = supported_capabilities(system)
+
+    def _unavailable_reason(scope: str) -> str:
+        # Never silently ignore a requested scope: distinguish a platform
+        # that cannot support this scope at all from one where the scope
+        # is possible but its adapter is not wired up yet.
+        if scope not in capabilities:
+            return f"{scope} is not supported on this platform ({system})"
+        return f"the {scope} adapter is not integrated yet"
+
     results: list[CheckResult] = [
         CheckResult(
             name=scope,
             completion="unavailable",
             findings=(),
-            errors=(f"the {scope} adapter is not integrated yet",),
+            errors=(_unavailable_reason(scope),),
             metadata={},
         )
         for scope in requested_scopes
@@ -103,7 +155,7 @@ def _run_scan(args: argparse.Namespace) -> int:
 
     context = {
         "generated_at": None,
-        "platform": platform.system(),
+        "platform": system,
         "architecture": platform.machine(),
         "requested_scopes": requested_scopes,
     }

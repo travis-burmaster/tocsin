@@ -48,8 +48,8 @@ class CommandResult:
     returncode: int | None
     stdout: str
     stderr: str
-    failure: str | None  # missing, timeout, cancelled, output-limit, permission
+    failure: str | None  # missing, timeout, cancelled, output-limit, permission, unavailable
 
 
-# Signature of run_command (defined in tocsin.runner, added in a later task).
+# Signature of run_command, defined in tocsin.runner.
 Runner = Callable[..., CommandResult]
