@@ -1,6 +1,6 @@
 {
   "schema_version": "1",
-  "generated_at": "2026-09-09T04:33:59Z",
+  "generated_at": "2026-01-01T00:00:00Z",
   "host": {
     "platform": "Darwin",
     "architecture": "arm64"
@@ -29,7 +29,7 @@
             "https://curl.se/docs/CVE-2023-38545.html"
           ],
           "action": "upgrade curl to 8.4.0 or later",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         },
         {
           "category": "package",
@@ -45,7 +45,7 @@
             "https://curl.se/docs/CVE-2023-38546.html"
           ],
           "action": "upgrade curl to 8.4.0 or later",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         },
         {
           "category": "package",
@@ -61,7 +61,7 @@
             "https://curl.se/docs/CVE-2024-2004.html"
           ],
           "action": "upgrade curl to 8.7.0 or later",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         },
         {
           "category": "package",
@@ -77,7 +77,7 @@
             "https://curl.se/docs/CVE-2024-7264.html"
           ],
           "action": "upgrade curl to 8.9.1 or later",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         },
         {
           "category": "package",
@@ -93,7 +93,7 @@
             "https://curl.se/docs/CVE-2025-0167.html"
           ],
           "action": "upgrade curl to 8.12.0 or later",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         },
         {
           "category": "package",
@@ -105,7 +105,7 @@
             "https://github.com/travis-burmaster/oss-security-kb/blob/main/wiki/homebrew/openssl@3.md"
           ],
           "action": "no reviewed advisory adapter for this formula",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         }
       ],
       "errors": [],
@@ -247,7 +247,7 @@
             "Eicar-Signature"
           ],
           "action": "quarantine or delete only after manual confirmation; Tocsin does not modify files",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         }
       ],
       "errors": [],
@@ -274,7 +274,7 @@
           "data_read": null,
           "time": null
         },
-        "files_requested": 2,
+        "files_requested": 1,
         "files_scanned": 2,
         "symlinks_skipped": 0,
         "ambiguous_skipped": 0,
@@ -293,7 +293,7 @@
         ],
         "root": "/Users/example/selected-files",
         "coverage": {
-          "assessed": 2,
+          "assessed": 1,
           "unassessed": 0
         }
       }
@@ -316,7 +316,7 @@
             "https://github.com/psf/requests/security/advisories/GHSA-j8r2-6x86-q33q"
           ],
           "action": "upgrade to 2.31.0",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         }
       ],
       "errors": [],

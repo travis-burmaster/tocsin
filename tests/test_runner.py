@@ -12,9 +12,15 @@ from tocsin.models import CommandResult
 from tocsin.runner import run_command
 
 # Every test that actually starts a child process needs POSIX process
-# groups. Registered once here; Task 8's Windows CI stays green because
-# those tests are skipped there. The Windows branch gets its own test
-# below that patches os.name instead of the platform.
+# groups. Registered once here so those tests are skipped on Windows --
+# this is one of two mechanisms that keep the CI matrix
+# (.github/workflows/tests.yml) green off macOS, not the whole story by
+# itself: CLI-level tests in tests/test_cli.py and tests/test_integration.py
+# stay portable a different way (the `force_darwin` fixture in
+# tests/conftest.py), since they need Darwin's capability set to reach
+# an adapter at all, regardless of the host OS actually running pytest.
+# The Windows branch gets its own test below that patches os.name
+# instead of the platform.
 posix_only = pytest.mark.skipif(os.name != "posix", reason="requires POSIX process groups")
 
 

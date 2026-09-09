@@ -58,19 +58,63 @@ def _patch_which(monkeypatch, paths: dict[str, str]) -> None:
 
 # --- consistent run timestamp -----------------------------------------------
 
-def test_run_timestamp_is_shared_across_adapters_and_report(monkeypatch, tmp_path):
-    # --brew and --files use unrelated adapters (Homebrew inventory,
-    # ClamAV file scan); every Finding they produce, plus the JSON
-    # report's top-level generated_at, must carry the exact same
-    # observed_at -- one run timestamp generated once by the CLI, not one
-    # per adapter call.
-    _patch_which(monkeypatch, {'brew': '/opt/homebrew/bin/brew', 'clamscan': '/opt/homebrew/bin/clamscan'})
-    (tmp_path / 'clean.txt').write_text('hello')
+# A hand-written OSV-Scanner payload (schema per docs/evidence/osv-contract.md's
+# "JSON keys consumed" section) producing exactly one detected finding, so
+# --project contributes a Finding to check observed_at against, the same
+# way --brew and --files do below.
+def _osv_payload_with_one_finding(manifest_path: str) -> str:
+    return json.dumps({
+        'results': [{
+            'source': {'path': manifest_path, 'type': 'lockfile'},
+            'packages': [{
+                'package': {'name': 'requests', 'version': '2.19.0', 'ecosystem': 'PyPI'},
+                'groups': [{'ids': ['PYSEC-2023-74'], 'aliases': ['CVE-2023-32681'], 'max_severity': '6.1'}],
+                'vulnerabilities': [{
+                    'id': 'PYSEC-2023-74',
+                    'affected': [{
+                        'package': {'ecosystem': 'PyPI', 'name': 'requests'},
+                        'ranges': [{'type': 'ECOSYSTEM', 'events': [{'introduced': '0'}, {'fixed': '2.31.0'}]}],
+                    }],
+                    'references': [{'url': 'https://example.invalid/advisory'}],
+                }],
+            }],
+        }],
+        'experimental_config': {},
+    })
+
+
+def test_run_timestamp_is_shared_across_adapters_and_report(monkeypatch, tmp_path, force_darwin):
+    # --brew, --files, and --project use three unrelated adapters
+    # (Homebrew inventory, ClamAV file scan, OSV-Scanner dependency scan);
+    # every Finding they produce, plus the JSON report's top-level
+    # generated_at, must carry the exact same observed_at -- one run
+    # timestamp generated once by the CLI, not one per adapter call.
+    # --posture's equivalent coverage is
+    # tests/test_posture.py::test_observed_at_is_shared_across_all_setting_findings
+    # (a direct scan_posture() call, not through main(), so it can pin
+    # launch_dirs=[] instead of reading the real host filesystem -- see
+    # this file's module docstring for why --posture stays out of here).
+    _patch_which(monkeypatch, {
+        'brew': '/opt/homebrew/bin/brew',
+        'clamscan': '/opt/homebrew/bin/clamscan',
+        'osv-scanner': '/opt/homebrew/bin/osv-scanner',
+    })
+    files_dir = tmp_path / 'files'
+    files_dir.mkdir()
+    (files_dir / 'clean.txt').write_text('hello')
+    project_dir = tmp_path / 'project'
+    project_dir.mkdir()
+    (project_dir / 'requirements.txt').write_text('requests==2.19.0\n')
+    manifest_path = str((project_dir / 'requirements.txt').resolve())
     output = tmp_path / 'report.json'
 
     def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
         if argv[0] == '/opt/homebrew/bin/brew':
             return CommandResult(0, _brew_payload('thing', '1.0.0'), '', None)
+        if argv[0] == '/opt/homebrew/bin/osv-scanner':
+            if argv[-1] == '--version':
+                return CommandResult(0, 'osv-scanner version: 2.5.1\n', '', None)
+            return CommandResult(1, _osv_payload_with_one_finding(manifest_path), '', None)
         if argv[-1] == '--version':
             return CommandResult(0, CLAMAV_VERSION_TEXT, '', None)
         if argv[-1] == '--help':
@@ -78,14 +122,21 @@ def test_run_timestamp_is_shared_across_adapters_and_report(monkeypatch, tmp_pat
         return CommandResult(0, '----------- SCAN SUMMARY -----------\nScanned files: 1\nInfected files: 0\n', '', None)
 
     code = main(
-        ['scan', '--brew', '--files', str(tmp_path), '--format', 'json', '--output', str(output)],
+        [
+            'scan', '--brew', '--files', str(files_dir), '--project', str(project_dir), '--online',
+            '--format', 'json', '--output', str(output),
+        ],
         runner=fake_runner,
     )
 
-    assert code == 0
+    assert code == 1  # complete throughout; project's finding is 'detected' (actionable)
     payload = json.loads(output.read_text())
     generated_at = payload['generated_at']
     assert generated_at is not None
+
+    by_name = {r['name']: r for r in payload['results']}
+    assert set(by_name) == {'brew', 'files', 'project'}
+    assert by_name['project']['findings'], 'expected --project to contribute a finding too'
 
     observed_timestamps = set()
     for result in payload['results']:
@@ -98,7 +149,10 @@ def test_run_timestamp_is_shared_across_adapters_and_report(monkeypatch, tmp_pat
 
 # --- cancellation ------------------------------------------------------------
 
-def test_keyboard_interrupt_during_first_scope_is_recorded_and_exits_2(monkeypatch, tmp_path):
+def test_keyboard_interrupt_during_first_scope_is_recorded_and_exits_2(monkeypatch, tmp_path, force_darwin):
+    # force_darwin: without it, 'brew' is reported unsupported before the
+    # fake runner is ever called, and this would pass without actually
+    # exercising cancellation at all.
     _patch_which(monkeypatch, {'brew': '/opt/homebrew/bin/brew'})
 
     def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
@@ -111,7 +165,7 @@ def test_keyboard_interrupt_during_first_scope_is_recorded_and_exits_2(monkeypat
     assert code == 2
 
 
-def test_keyboard_interrupt_report_marks_interrupted_and_unstarted_scopes(monkeypatch, tmp_path, capsys):
+def test_keyboard_interrupt_report_marks_interrupted_and_unstarted_scopes(monkeypatch, tmp_path, capsys, force_darwin):
     _patch_which(monkeypatch, {'brew': '/opt/homebrew/bin/brew'})
 
     def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
@@ -138,7 +192,7 @@ def test_keyboard_interrupt_report_marks_interrupted_and_unstarted_scopes(monkey
     assert 'not run: scan cancelled' in files_result['errors']
 
 
-def test_keyboard_interrupt_without_command_result_attribute_is_still_handled(monkeypatch, tmp_path, capsys):
+def test_keyboard_interrupt_without_command_result_attribute_is_still_handled(monkeypatch, tmp_path, capsys, force_darwin):
     # The runner contract only guarantees command_result is attached when
     # a real subprocess was involved; the CLI must not assume it is
     # always present.
@@ -157,7 +211,7 @@ def test_keyboard_interrupt_without_command_result_attribute_is_still_handled(mo
     assert 'cancelled by user' in payload['results'][0]['errors']
 
 
-def test_keyboard_interrupt_still_renders_text_format(monkeypatch, tmp_path, capsys):
+def test_keyboard_interrupt_still_renders_text_format(monkeypatch, tmp_path, capsys, force_darwin):
     _patch_which(monkeypatch, {'brew': '/opt/homebrew/bin/brew'})
 
     def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
@@ -169,6 +223,84 @@ def test_keyboard_interrupt_still_renders_text_format(monkeypatch, tmp_path, cap
     out = capsys.readouterr().out
     assert '== brew [partial] ==' in out
     assert 'cancelled by user' in out
+
+
+def test_apply_cancellation_does_not_index_error_when_every_scope_already_appended():
+    # Controller item 3(a): a KeyboardInterrupt arriving after the last
+    # scope's result has already been appended (a narrow race between
+    # that append and the for loop naturally exiting) must not compute
+    # requested_scopes[len(results)] with an out-of-range index and crash
+    # the whole scan. This is exercised directly against the extracted
+    # helper: a fake runner cannot deterministically land the interrupt
+    # in that exact gap, since every real interrupt during an adapter
+    # call happens strictly before that scope's result is appended.
+    import tocsin.cli as cli_module
+    from tocsin.models import CheckResult
+
+    requested_scopes = ['brew', 'files']
+    results = [
+        CheckResult(name='brew', completion='complete', findings=(), errors=(), metadata={}),
+        CheckResult(name='files', completion='complete', findings=(), errors=(), metadata={}),
+    ]
+    interrupt = KeyboardInterrupt()
+
+    cli_module._apply_cancellation(interrupt, results, requested_scopes)
+
+    # No IndexError, and nothing synthetic appended: both scopes had
+    # already produced a real result, so there is nothing to mark
+    # 'partial'/'cancelled' or 'unavailable'/'not run'.
+    assert [r.name for r in results] == ['brew', 'files']
+    assert [r.completion for r in results] == ['complete', 'complete']
+
+
+def test_apply_cancellation_marks_interrupted_and_remaining_scopes():
+    # The ordinary case, tested directly against the helper too: one
+    # scope already finished, the next one is where the interrupt landed,
+    # and any scope after that is marked unavailable rather than missing.
+    import tocsin.cli as cli_module
+    from tocsin.models import CheckResult
+
+    requested_scopes = ['brew', 'files', 'posture']
+    results = [CheckResult(name='brew', completion='complete', findings=(), errors=(), metadata={})]
+    interrupt = KeyboardInterrupt()
+    interrupt.command_result = CommandResult(None, '', '', 'cancelled')
+
+    cli_module._apply_cancellation(interrupt, results, requested_scopes)
+
+    assert [r.name for r in results] == ['brew', 'files', 'posture']
+    files_result, posture_result = results[1], results[2]
+    assert files_result.completion == 'partial'
+    assert files_result.errors == ('cancelled by user',)
+    assert files_result.metadata['cancelled'] is True
+    assert files_result.metadata['command_result'] == {'returncode': None, 'failure': 'cancelled'}
+    assert posture_result.completion == 'unavailable'
+    assert posture_result.errors == ('not run: scan cancelled',)
+
+
+def test_keyboard_interrupt_during_render_is_handled_cleanly(monkeypatch, capsys, force_darwin):
+    # Controller item 3(b): a second Ctrl-C, this time while rendering or
+    # writing the report (after the adapter loop finished normally
+    # without ever raising), must not surface as an unhandled traceback.
+    # Injected by monkeypatching the render function cli.py calls, since
+    # a fake runner cannot land the interrupt after the adapter loop.
+    import tocsin.cli as cli_module
+
+    _patch_which(monkeypatch, {'brew': '/opt/homebrew/bin/brew'})
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, _brew_payload('thing', '1.0.0'), '', None)
+
+    def boom(*args, **kwargs):
+        raise KeyboardInterrupt()
+
+    monkeypatch.setattr(cli_module, 'render_text', boom)
+
+    code = main(['scan', '--brew'], runner=fake_runner)
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert err.strip() != ''
+    assert 'cancelled' in err.lower()
 
 
 # --- privacy epilog -----------------------------------------------------------
@@ -212,7 +344,7 @@ def test_capabilities_are_darwin_only():
 
 # --- multi-adapter orchestration ----------------------------------------------
 
-def test_orchestration_mixes_detected_and_unavailable_and_exits_2(monkeypatch, tmp_path):
+def test_orchestration_mixes_detected_and_unavailable_and_exits_2(monkeypatch, tmp_path, force_darwin):
     # --brew: a curl install matching one of the six reviewed advisory
     # records (CVE-2023-38545, fixed in 8.4.0) -> a real 'detected'
     # finding from tocsin.adapters.curl.assess_curl.

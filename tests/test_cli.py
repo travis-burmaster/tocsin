@@ -65,10 +65,19 @@ def test_existing_output_replaced_with_overwrite(tmp_path):
     assert mode == 0o600
 
 
+def _stub_runner(argv, *, timeout, max_bytes, extra_env=None):
+    # A real `brew --version` (or clamscan/osv-scanner, if ever present)
+    # must never run from a test: macos-latest CI runners ship Homebrew
+    # pre-installed, so doctor's engine-discovery probe would otherwise
+    # execute a real command. Every doctor test that doesn't care about a
+    # specific engine's reported text uses this instead.
+    return CommandResult(0, '', '', None)
+
+
 def test_doctor_reports_platform_python_and_capabilities(capsys):
     from tocsin.platforms import supported_capabilities
 
-    code = main(['doctor'])
+    code = main(['doctor'], runner=_stub_runner)
 
     assert code == 0
     out = capsys.readouterr().out
@@ -80,7 +89,7 @@ def test_doctor_reports_platform_python_and_capabilities(capsys):
 
 
 def test_doctor_discovers_known_engines_without_installing(capsys):
-    code = main(['doctor'])
+    code = main(['doctor'], runner=_stub_runner)
 
     assert code == 0
     out = capsys.readouterr().out
@@ -107,7 +116,7 @@ def test_doctor_reports_clamscan_engine_and_flag_support(monkeypatch, capsys):
 def test_doctor_reports_kb_readability_and_commit(capsys):
     kb_root = Path(__file__).parent / 'fixtures' / 'kb'
 
-    code = main(['doctor', '--kb', str(kb_root)])
+    code = main(['doctor', '--kb', str(kb_root)], runner=_stub_runner)
 
     assert code == 0
     out = capsys.readouterr().out
@@ -118,20 +127,22 @@ def test_doctor_reports_kb_readability_and_commit(capsys):
 def test_doctor_reports_missing_kb_path(tmp_path, capsys):
     missing = tmp_path / 'nowhere'
 
-    code = main(['doctor', '--kb', str(missing)])
+    code = main(['doctor', '--kb', str(missing)], runner=_stub_runner)
 
     assert code == 0
     out = capsys.readouterr().out
     assert f"kb: {missing} (not found)" in out
 
 
-def test_scan_brew_with_kb_fixture_is_complete_and_unassessed(monkeypatch, capsys):
+def test_scan_brew_with_kb_fixture_is_complete_and_unassessed(monkeypatch, capsys, force_darwin):
     # Never hit the real `brew` binary from a CLI-level test: patch the
     # macos adapter's shutil.which so it "finds" a fake brew, and inject a
     # fake runner all the way through main() so no subprocess ever runs.
     # 'curl' is deliberately not used here: since Task 5 it has its own
     # reviewed advisory adapter and is no longer generically unassessed
     # (see tests/test_curl.py and the curl-specific tests in test_cli.py).
+    # force_darwin: this scope only reaches the adapter at all on Darwin
+    # (supported_capabilities is empty elsewhere) -- see tests/conftest.py.
     monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
     kb_root = Path(__file__).parent / 'fixtures' / 'kb'
     payload = json.dumps({
@@ -155,9 +166,11 @@ def test_scan_brew_with_kb_fixture_is_complete_and_unassessed(monkeypatch, capsy
     assert 'coverage: assessed=0 unassessed=1' in out
 
 
-def test_scan_project_with_fake_runner_online_is_complete(monkeypatch, capsys, tmp_path):
+def test_scan_project_with_fake_runner_online_is_complete(monkeypatch, capsys, tmp_path, force_darwin):
     # Never hit the real osv-scanner binary: patch the osv adapter's
     # shutil.which and inject a fake runner all the way through main().
+    # force_darwin: see tests/conftest.py -- this scope needs Darwin's
+    # capability set to reach the adapter at all.
     monkeypatch.setattr(osv_module.shutil, 'which', lambda name: '/opt/homebrew/bin/osv-scanner')
     version_output = 'osv-scanner version: 2.5.1\n'
     empty_json = json.dumps({'results': [], 'experimental_config': {}})
@@ -175,7 +188,10 @@ def test_scan_project_with_fake_runner_online_is_complete(monkeypatch, capsys, t
     assert 'coverage: assessed=0 unassessed=1' in out
 
 
-def test_scan_project_offline_without_database_is_unavailable(monkeypatch, capsys, tmp_path):
+def test_scan_project_offline_without_database_is_unavailable(monkeypatch, capsys, tmp_path, force_darwin):
+    # force_darwin: without it, this scope is reported unsupported on the
+    # host platform before ever reaching the database check below (see
+    # tests/conftest.py).
     monkeypatch.setattr(osv_module.shutil, 'which', lambda name: '/opt/homebrew/bin/osv-scanner')
 
     def _forbidden(*args, **kwargs):
@@ -189,7 +205,10 @@ def test_scan_project_offline_without_database_is_unavailable(monkeypatch, capsy
     assert '--osv-database' in out
 
 
-def test_scan_project_nonexistent_path_is_error_without_calling_adapter(monkeypatch, capsys, tmp_path):
+def test_scan_project_nonexistent_path_is_error_without_calling_adapter(monkeypatch, capsys, tmp_path, force_darwin):
+    # force_darwin: see tests/conftest.py -- this scope needs Darwin's
+    # capability set to reach the path check below rather than being
+    # reported unsupported first.
     monkeypatch.setattr(osv_module.shutil, 'which', lambda name: '/opt/homebrew/bin/osv-scanner')
     missing = tmp_path / 'does-not-exist'
 
@@ -204,7 +223,8 @@ def test_scan_project_nonexistent_path_is_error_without_calling_adapter(monkeypa
     assert str(missing) in out
 
 
-def test_scan_project_path_that_is_a_file_is_error(monkeypatch, capsys, tmp_path):
+def test_scan_project_path_that_is_a_file_is_error(monkeypatch, capsys, tmp_path, force_darwin):
+    # force_darwin: see tests/conftest.py.
     monkeypatch.setattr(osv_module.shutil, 'which', lambda name: '/opt/homebrew/bin/osv-scanner')
     a_file = tmp_path / 'not-a-directory.txt'
     a_file.write_text('oops')
@@ -219,7 +239,10 @@ def test_scan_project_path_that_is_a_file_is_error(monkeypatch, capsys, tmp_path
     assert '== project [error] ==' in out
 
 
-def test_scan_files_nonexistent_path_is_error_without_calling_adapter(monkeypatch, capsys, tmp_path):
+def test_scan_files_nonexistent_path_is_error_without_calling_adapter(monkeypatch, capsys, tmp_path, force_darwin):
+    # force_darwin: see tests/conftest.py -- this scope needs Darwin's
+    # capability set to reach the path check below rather than being
+    # reported unsupported first.
     monkeypatch.setattr(clamav_module.shutil, 'which', lambda name: '/opt/homebrew/bin/clamscan')
     missing = tmp_path / 'does-not-exist'
 
@@ -234,7 +257,8 @@ def test_scan_files_nonexistent_path_is_error_without_calling_adapter(monkeypatc
     assert str(missing) in out
 
 
-def test_scan_files_with_fake_runner_is_complete(monkeypatch, capsys, tmp_path):
+def test_scan_files_with_fake_runner_is_complete(monkeypatch, capsys, tmp_path, force_darwin):
+    # force_darwin: see tests/conftest.py.
     monkeypatch.setattr(clamav_module.shutil, 'which', lambda name: '/opt/homebrew/bin/clamscan')
     (tmp_path / 'clean.txt').write_text('hello')
 

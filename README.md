@@ -71,7 +71,8 @@ Privacy:
   machine. The one exception is --online, which transmits package
   names and versions to the OSV advisory service for the --project
   scope. File contents and reports are never uploaded by Tocsin.
-  Reports (stdout or --output) are written with file mode 0600.
+  Reports written with --output are created with file mode 0600;
+  stdout output is left to the terminal.
 ```
 
 ```text
@@ -133,7 +134,7 @@ JSON (`docs/samples/report-sample.json`):
 ```json
 {
   "schema_version": "1",
-  "generated_at": "2026-09-09T04:33:59Z",
+  "generated_at": "2026-01-01T00:00:00Z",
   "host": { "platform": "Darwin", "architecture": "arm64" },
   "requested_scopes": ["brew", "files", "project"],
   "results": [
@@ -149,11 +150,11 @@ JSON (`docs/samples/report-sample.json`):
           "confidence": "high",
           "evidence": ["Eicar-Signature"],
           "action": "quarantine or delete only after manual confirmation; Tocsin does not modify files",
-          "observed_at": "2026-09-09T04:33:59Z"
+          "observed_at": "2026-01-01T00:00:00Z"
         }
       ],
       "errors": [],
-      "metadata": { "coverage": { "assessed": 2, "unassessed": 0 } }
+      "metadata": { "coverage": { "assessed": 1, "unassessed": 0 } }
     }
   ]
 }

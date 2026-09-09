@@ -150,6 +150,18 @@ inline at each skip:
 | `test_symlinked_plist_skipped_and_counted` | `tests/test_posture.py` | Creating a symlink requires elevated privilege on Windows. |
 | Every test in `tests/test_runner.py` prefixed `posix_only` (process start/kill/permission/exec tests) | `tests/test_runner.py` | Requires POSIX process groups (`os.killpg`, `start_new_session`); `run_command` itself refuses to start anything on a non-POSIX host, which is exercised separately by `test_windows_returns_unavailable_without_starting_anything` (portable, monkeypatches `os.name`). |
 
+Skipping is one of two mechanisms that keep the CI matrix green off
+macOS. The other: `supported_capabilities()` (`src/tocsin/platforms/__init__.py`)
+is empty for every platform except `'Darwin'`, so any CLI-level test that
+needs to actually reach an adapter -- not the platform-capability gate
+itself -- must force Darwin regardless of the real host running pytest.
+`tests/conftest.py`'s `force_darwin` fixture does this (monkeypatching
+`tocsin.cli`'s `platform.system`) and is used throughout
+`tests/test_cli.py` and `tests/test_integration.py`; the
+unsupported-platform-scope tests use the same lever in the other
+direction, forcing `'Linux'` to prove a scope is reported unsupported
+rather than silently skipped.
+
 The environment-gated real-engine integration tests
 (`test_real_clamscan_detects_eicar`, `test_real_osv_scanner_offline_scan_detects_requests_cve`)
 are skipped everywhere, including in CI, unless their `TOCSIN_*`

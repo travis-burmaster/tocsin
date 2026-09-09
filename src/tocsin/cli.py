@@ -39,7 +39,8 @@ _PRIVACY_EPILOG = (
     "  machine. The one exception is --online, which transmits package\n"
     "  names and versions to the OSV advisory service for the --project\n"
     "  scope. File contents and reports are never uploaded by Tocsin.\n"
-    "  Reports (stdout or --output) are written with file mode 0600.\n"
+    "  Reports written with --output are created with file mode 0600;\n"
+    "  stdout output is left to the terminal.\n"
 )
 
 
@@ -176,6 +177,55 @@ def _scope_requested(args: argparse.Namespace, name: str) -> bool:
     return value if name in _SCAN_BOOL_SCOPES else value is not None
 
 
+def _apply_cancellation(
+    interrupt: KeyboardInterrupt, results: list[CheckResult], requested_scopes: list[str],
+) -> None:
+    """Record a KeyboardInterrupt raised mid-scan into `results`, in place.
+
+    The bounded runner already killed the child process group (and its
+    own re-raise of KeyboardInterrupt attaches the partial CommandResult
+    as `interrupt.command_result`, if a real subprocess was ever started
+    for this scope). `results` already holds one CheckResult per scope
+    that finished before the interrupt; `requested_scopes[len(results)]`
+    is therefore the scope that was running when it was raised.
+
+    Guarded: if every scope had already appended its result by the time
+    the interrupt was caught (a narrow race -- e.g. a signal delivered
+    between the last scope's `results.append(...)` and the for loop
+    naturally exiting), there is no scope left to attribute the
+    interrupt to; `results` is left untouched rather than indexing past
+    the end of `requested_scopes` and crashing the whole scan.
+    """
+    if len(results) < len(requested_scopes):
+        interrupted_scope = requested_scopes[len(results)]
+        command_result = getattr(interrupt, "command_result", None)
+        metadata: dict[str, object] = {"cancelled": True}
+        if command_result is not None:
+            metadata["command_result"] = {
+                "returncode": command_result.returncode,
+                "failure": command_result.failure,
+            }
+        results.append(CheckResult(
+            name=interrupted_scope,
+            completion="partial",
+            findings=(),
+            errors=("cancelled by user",),
+            metadata=metadata,
+        ))
+    # A no-op slice (and so a no-op loop) once every scope already has a
+    # result -- findings collected so far, or () when none exist, per the
+    # scope that was actually interrupted above; everything after it is
+    # explicitly unavailable rather than silently missing.
+    for remaining_scope in requested_scopes[len(results):]:
+        results.append(CheckResult(
+            name=remaining_scope,
+            completion="unavailable",
+            findings=(),
+            errors=("not run: scan cancelled",),
+            metadata={},
+        ))
+
+
 def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
     requested_scopes = [name for name in _SCAN_SCOPE_ORDER if _scope_requested(args, name)]
     if not requested_scopes:
@@ -254,38 +304,11 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
                 metadata={},
             ))
     except KeyboardInterrupt as interrupt:
-        # The bounded runner already killed the child process group (and
-        # its own re-raise of KeyboardInterrupt attaches the partial
-        # CommandResult as `interrupt.command_result`, if a real
-        # subprocess was ever started for this scope). Stop immediately:
-        # the scope that was running becomes 'partial' with whatever
-        # findings were collected so far -- none, in practice, since an
-        # adapter that raises never returns a CheckResult to append them
-        # from -- and every scope after it is recorded 'unavailable'
-        # rather than silently dropped.
-        interrupted_scope = requested_scopes[len(results)]
-        command_result = getattr(interrupt, "command_result", None)
-        metadata: dict[str, object] = {"cancelled": True}
-        if command_result is not None:
-            metadata["command_result"] = {
-                "returncode": command_result.returncode,
-                "failure": command_result.failure,
-            }
-        results.append(CheckResult(
-            name=interrupted_scope,
-            completion="partial",
-            findings=(),
-            errors=("cancelled by user",),
-            metadata=metadata,
-        ))
-        for remaining_scope in requested_scopes[len(results):]:
-            results.append(CheckResult(
-                name=remaining_scope,
-                completion="unavailable",
-                findings=(),
-                errors=("not run: scan cancelled",),
-                metadata={},
-            ))
+        # Stop immediately: the scope that was running becomes 'partial'
+        # with 'cancelled by user', and every scope after it is recorded
+        # 'unavailable' rather than silently dropped. See
+        # _apply_cancellation's docstring for the boundary case it guards.
+        _apply_cancellation(interrupt, results, requested_scopes)
 
     context = {
         "generated_at": run_timestamp,
@@ -295,18 +318,30 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
     }
 
     code = exit_code(results)
-    content = render_json(results, context) if args.format == "json" else render_text(results, context)
 
-    if args.output:
-        written = _write_output(args.output, content, args.overwrite)
-        if not written:
-            print(
-                f"error: {args.output} already exists; pass --overwrite to replace it",
-                file=sys.stderr,
-            )
-            return 2
-    else:
-        sys.stdout.write(content)
+    try:
+        content = render_json(results, context) if args.format == "json" else render_text(results, context)
+
+        if args.output:
+            written = _write_output(args.output, content, args.overwrite)
+            if not written:
+                print(
+                    f"error: {args.output} already exists; pass --overwrite to replace it",
+                    file=sys.stderr,
+                )
+                return 2
+        else:
+            sys.stdout.write(content)
+    except KeyboardInterrupt:
+        # A second Ctrl-C, this time while rendering or writing the
+        # report rather than while an adapter was running. The scan's
+        # own results were already collected above; there is no safe
+        # partial write to retry here (rendering is in-memory and
+        # _write_output either fully succeeds or leaves nothing behind),
+        # so this reports cancellation and exits rather than attempting
+        # to write the report a second time.
+        print("error: cancelled while rendering/writing the report", file=sys.stderr)
+        return 2
 
     return code
 

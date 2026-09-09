@@ -2,9 +2,11 @@ name: tests
 
 # Portable fixture tests only. No secrets, no real engines (ClamAV,
 # OSV-Scanner, Homebrew) are installed here, and no scan target is the
-# runner host itself -- every adapter test in this suite injects a fake
-# Runner and reads from tests/fixtures/. The environment variables that
-# gate the optional real-engine integration tests
+# runner host itself -- every scan/doctor test in this suite injects a
+# fake Runner (including the doctor tests, so a real `brew --version`
+# never runs even though macos-latest ships Homebrew pre-installed) and
+# reads from tests/fixtures/. The environment variables that gate the
+# optional real-engine integration tests
 # (TOCSIN_CLAMSCAN, TOCSIN_OSV_SCANNER, TOCSIN_OSV_DB) are deliberately
 # never set here, so those tests stay skipped in CI. No report or
 # artifact this workflow produces is uploaded anywhere.

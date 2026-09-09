@@ -183,5 +183,6 @@ make a check incomplete the way `error`/`skipped` do.
 By default, every scan operation is local. The only exception is
 `--online` for `--project`, which transmits package names and versions to
 the OSV advisory service. File contents and reports are never uploaded by
-Tocsin. Reports (stdout or `--output`) are written with file mode 0600.
-The same text is printed in `tocsin scan --help`.
+Tocsin. Reports written with `--output` are created with file mode 0600;
+stdout output is left to the terminal (stdout has no file mode). The
+same text is printed in `tocsin scan --help`.

@@ -168,6 +168,28 @@ def test_scan_posture_all_missing_is_unknown_complete_with_coverage_gap():
     assert exit_code([result]) == 0  # unassessed is a coverage gap, not actionable
 
 
+def test_observed_at_is_shared_across_all_setting_findings():
+    # scan_posture's observed_at is what the CLI threads through as its
+    # one run timestamp (see tocsin.cli._run_scan); this exercises that
+    # parameter directly rather than through main(), so launch_dirs can
+    # be pinned to [] instead of reading the real host filesystem -- see
+    # tests/test_integration.py's module docstring for why a CLI-level
+    # (main()) --posture test is deliberately avoided there.
+    fixed_at = '2026-01-01T00:00:00Z'
+
+    result = scan_posture(runner=_missing_runner, launch_dirs=[], observed_at=fixed_at)
+
+    assert result.findings, 'expected at least one finding from the five posture settings'
+    assert {f.observed_at for f in result.findings} == {fixed_at}
+
+
+def test_observed_at_defaults_to_current_time_when_omitted():
+    result = scan_posture(runner=_missing_runner, launch_dirs=[])
+
+    assert result.findings
+    assert all(f.observed_at for f in result.findings)
+
+
 def test_scan_posture_all_settings_permission_denied_is_error():
     def fake(argv, *, timeout, max_bytes, extra_env=None):
         return CommandResult(None, '', '', 'permission')
