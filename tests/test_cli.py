@@ -20,10 +20,15 @@ def test_empty_scope_rejected():
 
 def test_output_file_created_with_mode_0600(tmp_path):
     output = tmp_path / "report.json"
+    missing = tmp_path / "does-not-exist"
 
-    code = main(['scan', '--posture', '--format', 'json', '--output', str(output)])
+    # --files with a nonexistent path is a deterministic, adapter-free way
+    # to get a fixed exit code here: cli.py reports "error" before ever
+    # calling a runner, so this test exercises --output/--overwrite
+    # mechanics only, independent of any particular scan scope.
+    code = main(['scan', '--files', str(missing), '--format', 'json', '--output', str(output)])
 
-    assert code == 2  # posture adapter is not integrated yet
+    assert code == 2
     assert output.exists()
     mode = stat.S_IMODE(output.stat().st_mode)
     assert mode == 0o600
@@ -32,8 +37,9 @@ def test_output_file_created_with_mode_0600(tmp_path):
 def test_existing_output_rejected_without_overwrite(tmp_path, capsys):
     output = tmp_path / "report.json"
     output.write_text("pre-existing content")
+    missing = tmp_path / "does-not-exist"
 
-    code = main(['scan', '--posture', '--format', 'json', '--output', str(output)])
+    code = main(['scan', '--files', str(missing), '--format', 'json', '--output', str(output)])
 
     assert code == 2
     assert output.read_text() == "pre-existing content"
@@ -44,8 +50,9 @@ def test_existing_output_rejected_without_overwrite(tmp_path, capsys):
 def test_existing_output_replaced_with_overwrite(tmp_path):
     output = tmp_path / "report.json"
     output.write_text("pre-existing content")
+    missing = tmp_path / "does-not-exist"
 
-    code = main(['scan', '--posture', '--format', 'json', '--output', str(output), '--overwrite'])
+    code = main(['scan', '--files', str(missing), '--format', 'json', '--output', str(output), '--overwrite'])
 
     assert code == 2
     assert "pre-existing content" not in output.read_text()
@@ -240,12 +247,18 @@ def test_scan_files_with_fake_runner_is_complete(monkeypatch, capsys, tmp_path):
     assert '== files [complete] ==' in out
 
 
-def test_scan_reports_unsupported_scope_explicitly(capsys):
-    # --posture has no adapter on any platform yet (Task 7 adds it), so this
-    # stays a clean "unsupported"/"not integrated" signal regardless of host.
+def test_scan_reports_unsupported_scope_explicitly(monkeypatch, capsys):
+    # Every scan scope now has an adapter on Darwin (Task 7 added the last
+    # one, 'posture'), so simulate an unsupported platform instead: the CLI
+    # must still report the scope as explicitly unsupported rather than
+    # silently attempting or ignoring it.
+    import tocsin.cli as cli_module
+
+    monkeypatch.setattr(cli_module.platform, 'system', lambda: 'Linux')
+
     code = main(['scan', '--posture'])
 
     assert code == 2
     out = capsys.readouterr().out
     assert "posture" in out
-    assert "not supported on this platform" in out or "not integrated yet" in out
+    assert "not supported on this platform" in out
