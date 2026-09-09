@@ -9,6 +9,8 @@ import shutil
 import sys
 from pathlib import Path
 
+from tocsin.adapters.clamav import doctor_summary as clamav_doctor_summary
+from tocsin.adapters.clamav import scan_files
 from tocsin.adapters.osv import scan_project, version_compatibility
 from tocsin.kb import kb_snapshot
 from tocsin.models import CheckResult, Runner
@@ -126,6 +128,13 @@ def _run_doctor(*, kb: str | None = None, runner: Runner = run_command) -> int:
     print(f"capabilities: {', '.join(sorted(capabilities)) if capabilities else 'none integrated yet'}")
 
     for name in _ENGINE_EXECUTABLES:
+        if name == "clamscan":
+            # Reuses the same engine/feature probe scan_files uses, so
+            # doctor reports exactly what a --files scan would decide
+            # (engine/signature version and date, and required-flag support)
+            # rather than just the raw --version line.
+            print(f"{name}: {clamav_doctor_summary(runner=runner)}")
+            continue
         line = _report_engine(name, runner=runner)
         if name == "osv-scanner" and line.startswith("osv-scanner version:"):
             line = f"{line} -- {version_compatibility(line)}"
@@ -172,6 +181,19 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
         if scope == "brew" and scope in capabilities:
             kb_root = Path(args.kb) if args.kb else None
             results.append(inventory_brew(kb_root=kb_root, runner=runner))
+            continue
+        if scope == "files" and scope in capabilities:
+            files_path = Path(args.files)
+            if not files_path.exists():
+                results.append(CheckResult(
+                    name="files",
+                    completion="error",
+                    findings=(),
+                    errors=(f"--files path does not exist: {files_path}",),
+                    metadata={},
+                ))
+                continue
+            results.append(scan_files(files_path.resolve(), runner=runner))
             continue
         if scope == "project" and scope in capabilities:
             project_path = Path(args.project)

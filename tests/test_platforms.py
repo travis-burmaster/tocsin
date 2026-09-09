@@ -6,9 +6,9 @@ def test_linux_does_not_claim_macos_checks():
 
 
 def test_darwin_has_brew_capability():
-    # Task 3 adds 'brew'; Task 4 adds 'project'; Tasks 6/7 add
-    # 'files'/'posture' as their adapters land.
-    assert supported_capabilities('Darwin') == frozenset({'brew', 'project'})
+    # Task 3 adds 'brew'; Task 4 adds 'project'; Task 6 adds 'files';
+    # Task 7 adds 'posture' as its adapter lands.
+    assert supported_capabilities('Darwin') == frozenset({'brew', 'project', 'files'})
 
 
 def test_windows_has_no_capabilities():

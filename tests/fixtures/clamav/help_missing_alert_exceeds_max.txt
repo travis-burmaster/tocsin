@@ -1,0 +1,18 @@
+Clam AntiVirus Scanner 1.4.2
+By The ClamAV Team: https://www.clamav.net/about.html#credits
+(C) 2025 Cisco Systems, Inc.
+
+           clamscan [options] [file/directory/-]
+
+    --help                   -h             Print this help screen
+    --version                -V             Print version number
+    --stdout                                Write to stdout instead of stderr. Does not affect 'debug' messages.
+    --infected               -i             Only print infected files
+    --database FILE/DIR      -d FILE/DIR    Load virus database from FILE or load all supported db files from DIR
+    --file-list=FILE         -f FILE        Scan files from FILE
+    --follow-dir-symlinks[=0/1/2]           Follow directory symlinks (0=never, 1=direct args only, 2=always)
+    --follow-file-symlinks[=0/1/2]          Follow file symlinks (0=never, 1=direct args only, 2=always)
+    --max-filesize=#n                       Files larger than this will be skipped and assumed clean
+    --max-scansize=#n                       The maximum amount of data to scan for each container file
+    --max-recursion=#n                      Maximum archive recursion level for container file
+    --alert-encrypted[=yes/no]              Alert if encrypted archive/doc is detected as heuristic virus

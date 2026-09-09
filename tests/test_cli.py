@@ -3,10 +3,15 @@ import platform
 import stat
 from pathlib import Path
 
+from tocsin.adapters import clamav as clamav_module
 from tocsin.adapters import osv as osv_module
 from tocsin.cli import main
 from tocsin.models import CommandResult
 from tocsin.platforms import macos
+
+CLAMAV_FIXTURES = Path(__file__).parent / 'fixtures' / 'clamav'
+CLAMAV_HELP_TEXT = (CLAMAV_FIXTURES / 'help.txt').read_text()
+CLAMAV_VERSION_TEXT = (CLAMAV_FIXTURES / 'version.txt').read_text()
 
 
 def test_empty_scope_rejected():
@@ -69,6 +74,22 @@ def test_doctor_discovers_known_engines_without_installing(capsys):
     out = capsys.readouterr().out
     for name in ("brew", "clamscan", "osv-scanner"):
         assert f"{name}: " in out
+
+
+def test_doctor_reports_clamscan_engine_and_flag_support(monkeypatch, capsys):
+    monkeypatch.setattr(clamav_module.shutil, 'which', lambda name: '/opt/homebrew/bin/clamscan')
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        if argv[-1] == '--version':
+            return CommandResult(0, CLAMAV_VERSION_TEXT, '', None)
+        return CommandResult(0, CLAMAV_HELP_TEXT, '', None)
+
+    code = main(['doctor'], runner=fake_runner)
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert 'clamscan: engine 1.4.2, signatures 27540' in out
+    assert 'required flags present' in out
 
 
 def test_doctor_reports_kb_readability_and_commit(capsys):
@@ -186,8 +207,41 @@ def test_scan_project_path_that_is_a_file_is_error(monkeypatch, capsys, tmp_path
     assert '== project [error] ==' in out
 
 
+def test_scan_files_nonexistent_path_is_error_without_calling_adapter(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(clamav_module.shutil, 'which', lambda name: '/opt/homebrew/bin/clamscan')
+    missing = tmp_path / 'does-not-exist'
+
+    def _forbidden(*args, **kwargs):
+        raise AssertionError('runner must not be called for a nonexistent --files path')
+
+    code = main(['scan', '--files', str(missing)], runner=_forbidden)
+
+    assert code == 2
+    out = capsys.readouterr().out
+    assert '== files [error] ==' in out
+    assert str(missing) in out
+
+
+def test_scan_files_with_fake_runner_is_complete(monkeypatch, capsys, tmp_path):
+    monkeypatch.setattr(clamav_module.shutil, 'which', lambda name: '/opt/homebrew/bin/clamscan')
+    (tmp_path / 'clean.txt').write_text('hello')
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        if argv[-1] == '--version':
+            return CommandResult(0, CLAMAV_VERSION_TEXT, '', None)
+        if argv[-1] == '--help':
+            return CommandResult(0, CLAMAV_HELP_TEXT, '', None)
+        return CommandResult(0, '----------- SCAN SUMMARY -----------\nScanned files: 1\nInfected files: 0\n', '', None)
+
+    code = main(['scan', '--files', str(tmp_path)], runner=fake_runner)
+
+    assert code == 0
+    out = capsys.readouterr().out
+    assert '== files [complete] ==' in out
+
+
 def test_scan_reports_unsupported_scope_explicitly(capsys):
-    # --posture has no adapter on any platform yet (Task 6 adds it), so this
+    # --posture has no adapter on any platform yet (Task 7 adds it), so this
     # stays a clean "unsupported"/"not integrated" signal regardless of host.
     code = main(['scan', '--posture'])
 
