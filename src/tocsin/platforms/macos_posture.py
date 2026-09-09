@@ -86,7 +86,11 @@ _RECOGNIZED_PHRASES: dict[str, dict[str, str]] = {
 # this is a documented limitation, not exhaustive persistence detection.
 _MAX_PLIST_BYTES = 1024 * 1024  # 1 MiB
 
-_UNSAFE_LOCATION_PREFIXES = ('/tmp/', '/private/tmp/', '/var/tmp/', '/Users/Shared/')
+# /var and /tmp are themselves symlinks to /private/var and /private/tmp
+# on macOS, so both the symlinked and the resolved forms are listed.
+_UNSAFE_LOCATION_PREFIXES = (
+    '/tmp/', '/private/tmp/', '/var/tmp/', '/private/var/tmp/', '/Users/Shared/',
+)
 
 
 def _default_launch_dirs() -> list[Path]:
@@ -109,14 +113,16 @@ def parse_setting(name: str, returncode: int, output: str) -> str:
     """Map one posture command's exit code and output to enabled/disabled/unknown.
 
     Recognizes only the exact phrases in `_RECOGNIZED_PHRASES` for `name`,
-    matched as a substring of the first non-empty line of `output`
-    (case-sensitive, leading/trailing whitespace on that line ignored),
-    and only when `returncode == 0`. Everything else -- a nonzero exit, a
-    setting with no recognized-phrase table, or wording that matches
-    neither the enabled nor the disabled phrase -- is 'unknown'. A phrase
-    that only appears on a later line (e.g. csrutil's trailing
-    "Configuration:" line) is never matched: only the first non-empty
-    line is judged.
+    matched against the *entire* first non-empty line of `output` after
+    stripping its leading/trailing whitespace (case-sensitive, exact
+    equality -- not a substring match), and only when `returncode == 0`.
+    Everything else -- a nonzero exit, a setting with no recognized-phrase
+    table, extra text before or after the phrase on that line (e.g. a
+    "Note: " prefix or a trailing "(deprecated)"/"(Custom Configuration)"
+    suffix), or wording that matches neither the enabled nor the disabled
+    phrase -- is 'unknown'. A phrase that only appears on a later line
+    (e.g. csrutil's trailing "Configuration:" line) is never matched:
+    only the first non-empty line is judged.
     """
     if returncode != 0:
         return 'unknown'
@@ -125,7 +131,7 @@ def parse_setting(name: str, returncode: int, output: str) -> str:
         return 'unknown'
     first_line = _first_nonempty_line(output)
     for phrase, state in phrases.items():
-        if phrase in first_line:
+        if phrase == first_line:
             return state
     return 'unknown'
 
@@ -317,16 +323,43 @@ def _process_plist(plist_path: Path, observed_at: str) -> tuple[Finding, bool]:
 def _scan_launch_dir(directory: Path, observed_at: str) -> tuple[dict[str, object], list[Finding], list[str], bool]:
     """Inventory one launch directory. Returns (dir_metadata, findings, errors, made_partial)."""
     dir_str = str(directory)
-    if not directory.exists():
+    try:
+        exists = directory.exists()
+    except OSError as exc:
+        # Path.exists() itself can raise (e.g. EACCES/EPERM statting an
+        # unsearchable parent, or a TCC-restricted path under
+        # ~/Library) -- Path.exists() only swallows ENOENT/ENOTDIR/
+        # EBADF/ELOOP internally, so this is an access problem, not
+        # "missing": degrade to partial rather than letting it propagate.
+        return (
+            {'status': 'denied', 'plists': 0, 'symlinks_skipped': 0},
+            [],
+            [f'could not check {dir_str}: {exc}'],
+            True,
+        )
+    if not exists:
         return {'status': 'missing', 'plists': 0, 'symlinks_skipped': 0}, [], [], False
 
     try:
         entries = sorted(directory.iterdir())
-    except PermissionError:
+    except NotADirectoryError as exc:
+        # The configured path exists but is not a directory (e.g. a plain
+        # file) -- a misconfiguration, not an access problem, so it gets
+        # its own status, but is still a partial inventory with an error.
+        return (
+            {'status': 'unreadable', 'plists': 0, 'symlinks_skipped': 0},
+            [],
+            [f'{dir_str} is not a directory: {exc}'],
+            True,
+        )
+    except OSError as exc:
+        # Widened from PermissionError alone: any other OSError iterdir()
+        # can raise (including a PermissionError with a different errno
+        # than plain EACCES) must degrade to partial, never propagate.
         return (
             {'status': 'denied', 'plists': 0, 'symlinks_skipped': 0},
             [],
-            [f'permission denied listing {dir_str}'],
+            [f'permission denied listing {dir_str}: {exc}'],
             True,
         )
 

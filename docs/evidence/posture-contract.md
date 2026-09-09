@@ -1,7 +1,7 @@
 # macOS security posture and startup review contract (evidence)
 
-Adapter: `src/tocsin/platforms/macos.py` (`scan_posture`, `parse_setting`).
-This records the exact command outputs, recognized phrases, and
+Adapter: `src/tocsin/platforms/macos_posture.py` (`scan_posture`,
+`parse_setting`). This records the exact command outputs, recognized phrases, and
 launch-item review rules the adapter implements, so any future change to
 what Tocsin trusts as "enabled"/"disabled" or "needs-review" is a
 deliberate, re-verified decision rather than an assumption.
@@ -32,12 +32,15 @@ privileges to read them.
 ## Recognized phrases (exact, case-sensitive, first non-empty line only)
 
 `parse_setting(name, returncode, output)` recognizes only the phrases
-below, matched as a **substring of the first non-empty line** of
-`output`, and only when `returncode == 0`. Anything else -- a nonzero
-exit code, empty output, a setting with no phrase table, or wording that
-matches neither the enabled nor the disabled phrase (including csrutil's
-"Custom Configuration" state, a "Deferred enablement" FileVault message,
-or any future deprecation notice) -- is reported as `unknown` rather than
+below, matched against the **entire** first non-empty line of `output`
+after stripping its leading/trailing whitespace -- exact equality, not a
+substring match -- and only when `returncode == 0`. Anything else -- a
+nonzero exit code, empty output, a setting with no phrase table, extra
+text before or after the phrase on that line (e.g. a "Note: " prefix or a
+trailing "(deprecated)" suffix), or wording that matches neither the
+enabled nor the disabled phrase (including csrutil's "Custom
+Configuration" state, a "Deferred enablement" FileVault message, or any
+future deprecation notice) -- is reported as `unknown` rather than
 guessed from a partial word like "enabled" alone. A phrase that appears
 only on a line after the first is never matched.
 
@@ -71,7 +74,13 @@ re-implemented); a runner failure adds a `reason: ...` evidence line.
 Completion is `error` only if every one of the five setting commands
 failed specifically with a `permission` runner failure; a mix of
 failures, or any `missing`/`timeout`/other failure, degrades to `partial`
-(or stays `complete` if only `missing` occurred), never `error`.
+(or stays `complete` if only `missing` occurred), never `error`. This is a
+deliberate, controller-decided deviation from the shared runner-failure-
+to-completion map other adapters use (e.g. `brew`/`clamscan`, which treat
+a single `permission` failure as `error` immediately): a posture scan
+covers five independent settings, so one denied command is a partial
+coverage gap, not a failed check, and only total denial across all five
+counts as `error`.
 
 ## Startup (launch-item) inventory
 
@@ -85,15 +94,24 @@ documented limitation, not an oversight.
 **Per directory**:
 - Missing directory &rarr; `status: missing` in metadata, no error (not
   every Mac has all three directories populated).
-- Permission denied listing the directory &rarr; `status: denied`, an
-  entry in `errors`, and the check is `partial` (a partial inventory, not
-  a failure).
+- Permission denied listing the directory, **or** the `Path.exists()`
+  probe itself raising `OSError` (e.g. EACCES/EPERM statting through an
+  unsearchable parent, such as a TCC-restricted path under `~/Library`)
+  &rarr; `status: denied`, an entry in `errors`, and the check is
+  `partial` (a partial inventory, not a crash or a failure). Both the
+  `exists()` probe and the `iterdir()` call are wrapped in `try`/`except
+  OSError` for this reason -- `Path.exists()` only swallows
+  `ENOENT`/`ENOTDIR`/`EBADF`/`ELOOP` internally, so a bare `EACCES` would
+  otherwise propagate out of `scan_posture` entirely.
+- The configured path existing but not being a directory (e.g. a plain
+  file) &rarr; `status: unreadable`, an entry in `errors`, and the check
+  is `partial` -- a distinct status from `denied` because it is a
+  misconfiguration, not an access problem.
 - Readable &rarr; every entry is listed; a symlink is skipped and counted
   (`symlinks_skipped`) without being followed; only regular `*.plist`
-  files are read, bounded to 1 MiB (`plistlib.load`/`plistlib.loads` on
-  the bytes; both binary and XML plists occur in practice). Nothing a
-  plist references is ever executed, run, or resolved beyond
-  `Path(executable).exists()`.
+  files are read, bounded to 1 MiB (`plistlib.loads` on the bytes; both
+  binary and XML plists occur in practice). Nothing a plist references is
+  ever executed, run, or resolved beyond `Path(executable).exists()`.
 - A plist that cannot be stat'd, exceeds the 1 MiB bound, cannot be read,
   fails to parse, or does not decode to a dictionary &rarr;
   `Finding(category='startup', status='skipped', subject=<plist path>,
@@ -114,10 +132,12 @@ present):
 
 1. The executable string is absolute and resolves under a clearly unsafe
    writable location -- any of `/tmp/`, `/private/tmp/`, `/var/tmp/`,
-   `/Users/Shared/`, or the current user's `~/Downloads/` &rarr;
-   `needs-review`, with the matched location prefix recorded in evidence.
-   Checked *before* existence, since a program staged under a writable
-   location is a signal whether or not it happens to exist yet.
+   `/private/var/tmp/` (macOS `/var` is itself a symlink to `/private/var`,
+   so both the symlinked and resolved forms are listed), `/Users/Shared/`,
+   or the current user's `~/Downloads/` &rarr; `needs-review`, with the
+   matched location prefix recorded in evidence. Checked *before*
+   existence, since a program staged under a writable location is a
+   signal whether or not it happens to exist yet.
 2. Otherwise, the executable is absolute and `Path(executable).exists()`
    is `False` &rarr; `needs-review`, action "referenced executable is
    missing; verify the launch item is legitimate". If checking existence

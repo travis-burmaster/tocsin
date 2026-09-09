@@ -98,6 +98,16 @@ def test_parse_setting_deferred_enablement_is_unknown():
     assert parse_setting('filevault', 0, 'FileVault is Off but will be enabled after the next restart (Deferred enablement).') == 'unknown'
 
 
+def test_parse_setting_trailing_suffix_after_phrase_is_unknown():
+    # A match must be the *entire* stripped line, not a substring: extra
+    # trailing text (e.g. a deprecation notice) never counts.
+    assert parse_setting('sip', 0, 'System Integrity Protection status: enabled. (deprecated)') == 'unknown'
+
+
+def test_parse_setting_leading_prefix_before_phrase_is_unknown():
+    assert parse_setting('gatekeeper', 0, 'Note: assessments enabled') == 'unknown'
+
+
 # --- scan_posture: settings -------------------------------------------------
 
 def _runner_from(outputs: dict[str, str]):
@@ -158,7 +168,7 @@ def test_scan_posture_all_missing_is_unknown_complete_with_coverage_gap():
     assert exit_code([result]) == 0  # unassessed is a coverage gap, not actionable
 
 
-def test_scan_posture_permission_failure_is_partial():
+def test_scan_posture_all_settings_permission_denied_is_error():
     def fake(argv, *, timeout, max_bytes, extra_env=None):
         return CommandResult(None, '', '', 'permission')
 
@@ -261,6 +271,41 @@ def test_denied_launch_dir_is_error_string_and_partial(tmp_path):
     assert len(result.errors) == 1
 
 
+def test_launch_dir_with_unsearchable_parent_is_denied_and_partial(tmp_path):
+    # Path.exists() itself can raise (EACCES/EPERM statting through an
+    # unsearchable parent, e.g. a TCC-restricted path under ~/Library) --
+    # this must degrade to partial, never crash the scan.
+    if os.geteuid() == 0:
+        pytest.skip('root can traverse any directory regardless of mode')
+
+    parent = tmp_path / 'unsearchable'
+    parent.mkdir()
+    child = parent / 'LaunchAgents'
+    parent.chmod(0)
+    try:
+        result = scan_posture(runner=_missing_runner, launch_dirs=[child])
+    finally:
+        parent.chmod(0o700)
+
+    assert result.metadata['launch_dirs'][str(child)]['status'] == 'denied'
+    assert result.completion == 'partial'
+    assert len(result.errors) == 1
+
+
+def test_launch_dir_path_that_is_a_file_is_unreadable_and_partial(tmp_path):
+    # A launch-dir path that exists but is not a directory (e.g. a plain
+    # file) must degrade to partial with a distinct status, not crash
+    # with a NotADirectoryError.
+    file_path = tmp_path / 'LaunchAgents'
+    file_path.write_text('not a directory')
+
+    result = scan_posture(runner=_missing_runner, launch_dirs=[file_path])
+
+    assert result.metadata['launch_dirs'][str(file_path)]['status'] == 'unreadable'
+    assert result.completion == 'partial'
+    assert len(result.errors) == 1
+
+
 def test_malformed_plist_is_skipped_and_partial(tmp_path):
     (tmp_path / 'com.example.bad.plist').write_bytes(b'this is not a plist, just garbage bytes\x00\x01\x02')
 
@@ -319,6 +364,24 @@ def test_binary_plist_program_in_tmp_needs_review_with_location_evidence(tmp_pat
     (finding,) = _startup_findings(result)
     assert finding.status == 'needs-review'
     assert any('/tmp/' in e for e in finding.evidence)
+
+
+def test_binary_plist_program_in_resolved_var_tmp_needs_review(tmp_path):
+    # macOS /var is itself a symlink to /private/var, so /private/var/tmp/
+    # is a distinct unsafe-location prefix from /var/tmp/.
+    plist_path = tmp_path / 'com.example.privatevartmp.plist'
+    with open(plist_path, 'wb') as handle:
+        plistlib.dump(
+            {'Label': 'com.example.privatevartmp', 'Program': '/private/var/tmp/some-suspicious-binary'},
+            handle,
+            fmt=plistlib.FMT_BINARY,
+        )
+
+    result = scan_posture(runner=_missing_runner, launch_dirs=[tmp_path])
+
+    (finding,) = _startup_findings(result)
+    assert finding.status == 'needs-review'
+    assert any('/private/var/tmp/' in e for e in finding.evidence)
 
 
 def test_relative_program_needs_review(tmp_path):
