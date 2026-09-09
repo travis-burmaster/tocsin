@@ -96,14 +96,17 @@ def test_scan_brew_with_kb_fixture_is_complete_and_unassessed(monkeypatch, capsy
     # Never hit the real `brew` binary from a CLI-level test: patch the
     # macos adapter's shutil.which so it "finds" a fake brew, and inject a
     # fake runner all the way through main() so no subprocess ever runs.
+    # 'curl' is deliberately not used here: since Task 5 it has its own
+    # reviewed advisory adapter and is no longer generically unassessed
+    # (see tests/test_curl.py and the curl-specific tests in test_cli.py).
     monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
     kb_root = Path(__file__).parent / 'fixtures' / 'kb'
     payload = json.dumps({
         'formulae': [{
-            'name': 'curl',
-            'full_name': 'curl',
+            'name': 'thing',
+            'full_name': 'thing',
             'tap': 'homebrew/core',
-            'installed': [{'version': '8.9.1'}],
+            'installed': [{'version': '1.0.0'}],
         }],
         'casks': [],
     })

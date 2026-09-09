@@ -342,12 +342,18 @@ def test_inventory_cask_action_differs_from_formula(monkeypatch):
 
 
 def test_inventory_with_real_kb_attaches_found_context_and_evidence(monkeypatch):
+    # 'curl' is deliberately not used here: since Task 5 it has its own
+    # reviewed advisory adapter (see the curl-specific tests below) and no
+    # longer takes this generic unassessed-plus-KB-evidence path. This test
+    # covers that generic path for every other homebrew/core formula;
+    # curl.md's own KB parsing (advisories, kb_status) is covered directly
+    # in tests/test_kb.py against the same fixture.
     monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
     payload = _brew_payload(formulae=[{
-        'name': 'curl',
-        'full_name': 'curl',
+        'name': 'stub-formula',
+        'full_name': 'stub-formula',
         'tap': 'homebrew/core',
-        'installed': [{'version': '8.9.1'}],
+        'installed': [{'version': '1.0.0'}],
     }])
 
     def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
@@ -357,18 +363,22 @@ def test_inventory_with_real_kb_attaches_found_context_and_evidence(monkeypatch)
 
     finding = result.findings[0]
     assert finding.evidence != ()
-    assert finding.evidence[0].endswith('/wiki/homebrew/curl.md')
+    assert finding.evidence[0].endswith('/wiki/homebrew/stub-formula.md')
     package_entry = result.metadata['packages'][0]
     assert package_entry['kb']['status'] == 'found'
-    assert package_entry['kb']['kb_status'] == 'advisory-mapped'
+    assert package_entry['kb']['kb_status'] == 'baseline stub'
     assert result.metadata['kb']['root'] == str(KB_FIXTURES)
 
 
 def test_inventory_third_party_tap_kb_context_is_unavailable_with_reason(monkeypatch):
+    # A name other than 'curl' is used deliberately: since Task 5, any
+    # 'curl' package (any tap) is routed to assess_curl instead of this
+    # generic KB-context path -- see the curl-specific tests below for
+    # third-party-tap curl handling (assess_curl's own needs-review rule).
     monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
     payload = _brew_payload(formulae=[{
-        'name': 'curl',  # shadows core name, but from a different tap
-        'full_name': 'someone/tap/curl',
+        'name': 'thing',  # shadows nothing; just a non-core-tap formula
+        'full_name': 'someone/tap/thing',
         'tap': 'someone/tap',
         'installed': [{'version': '9.9.9'}],
     }])
@@ -400,11 +410,13 @@ def test_inventory_unassessed_packages_do_not_block_completion(monkeypatch):
 
 def test_inventory_untapped_formula_kb_context_is_unavailable_not_core(monkeypatch):
     # "tap": null happens for a formula installed from a local .rb file or
-    # a URL. It must never be treated as homebrew/core.
+    # a URL. It must never be treated as homebrew/core. A name other than
+    # 'curl' is used deliberately -- see the note in the third-party-tap
+    # test above.
     monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
     payload = _brew_payload(formulae=[{
-        'name': 'curl',
-        'full_name': 'curl',
+        'name': 'thing',
+        'full_name': 'thing',
         'tap': None,
         'installed': [{'version': '9.9.9'}],
     }])
@@ -499,3 +511,73 @@ def test_inventory_kb_path_that_is_a_file_is_partial_and_unavailable(monkeypatch
 
     assert result.completion == 'partial'
     assert result.metadata['kb']['status'] == 'unreadable'
+
+
+# --- inventory_brew: curl advisory integration (Task 5) ---------------------
+
+def test_inventory_curl_core_tap_vulnerable_version_is_detected(monkeypatch):
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+    payload = _brew_payload(formulae=[{
+        'name': 'curl',
+        'full_name': 'curl',
+        'tap': 'homebrew/core',
+        'installed': [{'version': '8.3.0'}],
+    }])
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    result = inventory_brew(kb_root=None, runner=fake_runner)
+
+    assert result.completion == 'complete'
+    detected = [f for f in result.findings if f.status == 'detected']
+    assert detected
+    assert any('CURL-CVE-2023-38545' in f.evidence for f in detected)
+    assert result.metadata['coverage'] == {'assessed': 1, 'unassessed': 0}
+    assert 'curl' in result.metadata['assessments']
+
+
+def test_inventory_curl_current_stable_is_no_known_match(monkeypatch):
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+    payload = _brew_payload(formulae=[{
+        'name': 'curl',
+        'full_name': 'curl',
+        'tap': 'homebrew/core',
+        'installed': [{'version': '8.21.0'}],
+    }])
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    result = inventory_brew(kb_root=None, runner=fake_runner)
+
+    assert result.completion == 'complete'
+    assert len(result.findings) == 1
+    assert result.findings[0].status == 'no-known-match'
+    assert result.metadata['coverage'] == {'assessed': 1, 'unassessed': 0}
+
+
+def test_inventory_curl_corrupt_snapshot_is_partial_with_error(monkeypatch):
+    monkeypatch.setattr(macos.shutil, 'which', lambda name: '/opt/homebrew/bin/brew')
+    payload = _brew_payload(formulae=[{
+        'name': 'curl',
+        'full_name': 'curl',
+        'tap': 'homebrew/core',
+        'installed': [{'version': '8.3.0'}],
+    }])
+
+    def fake_runner(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, payload, '', None)
+
+    def broken_load_records():
+        raise ValueError('corrupt snapshot')
+
+    monkeypatch.setattr(macos, 'load_records', broken_load_records)
+
+    result = inventory_brew(kb_root=None, runner=fake_runner)
+
+    assert result.completion == 'partial'
+    assert any('corrupt snapshot' in err for err in result.errors)
+    assert result.findings[0].status == 'unassessed'
+    assert result.metadata['coverage'] == {'assessed': 0, 'unassessed': 1}
+    assert 'assessments' not in result.metadata

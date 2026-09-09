@@ -1,0 +1,112 @@
+{
+  "schema_version": 1,
+  "package": "curl",
+  "source": "https://curl.se/docs/vuln.json",
+  "source_retrieved": "2026-09-08",
+  "reviewed_at": "2026-09-08",
+  "reviewer": "Tocsin maintainers (LLM-assisted review of upstream advisories)",
+  "records": [
+    {
+      "id": "CURL-CVE-2023-38545",
+      "aliases": ["CVE-2023-38545"],
+      "summary": "SOCKS5 heap buffer overflow",
+      "severity": "High",
+      "ranges": [{"introduced": "7.69.0", "fixed": "8.4.0"}],
+      "affects": "both",
+      "requires": {},
+      "withdrawn": null,
+      "published": "2023-10-11T08:00:00.00Z",
+      "modified": "2026-05-19T11:21:50.00Z",
+      "sources": [
+        "https://curl.se/docs/CVE-2023-38545.json",
+        "https://curl.se/docs/CVE-2023-38545.html"
+      ],
+      "notes": "last_affected 8.3.0 per feed. No applicability qualifier beyond the version range; Homebrew core builds curl's SOCKS5 proxy support unconditionally."
+    },
+    {
+      "id": "CURL-CVE-2023-38546",
+      "aliases": ["CVE-2023-38546"],
+      "summary": "cookie injection with none file",
+      "severity": "Low",
+      "ranges": [{"introduced": "7.9.1", "fixed": "8.4.0"}],
+      "affects": "lib",
+      "requires": {},
+      "withdrawn": null,
+      "published": "2023-10-11T08:00:00.00Z",
+      "modified": "2026-04-25T17:48:46.00Z",
+      "sources": [
+        "https://curl.se/docs/CVE-2023-38546.json",
+        "https://curl.se/docs/CVE-2023-38546.html"
+      ],
+      "notes": "last_affected 8.3.0 per feed. Feed marks affects=lib (libcurl only), but tool-vs-lib is not a Homebrew applicability qualifier since the formula ships both curl and libcurl from the same build; treated as applicable to the formula."
+    },
+    {
+      "id": "CURL-CVE-2024-2004",
+      "aliases": ["CVE-2024-2004"],
+      "summary": "Usage of disabled protocol",
+      "severity": "Low",
+      "ranges": [{"introduced": "7.85.0", "fixed": "8.7.0"}],
+      "affects": "both",
+      "requires": {},
+      "withdrawn": null,
+      "published": "2024-03-27T08:00:00.00Z",
+      "modified": "2026-04-25T17:48:46.00Z",
+      "sources": [
+        "https://curl.se/docs/CVE-2024-2004.json",
+        "https://curl.se/docs/CVE-2024-2004.html"
+      ],
+      "notes": "DISAGREEMENT: the OSS Security KB curl page states \"Fixed in curl 8.7.1\"; the upstream feed's SEMVER range gives fixed=8.7.0 and last_affected=8.6.0. This record uses the upstream feed value (8.7.0) per primary-source precedence."
+    },
+    {
+      "id": "CURL-CVE-2024-7264",
+      "aliases": ["CVE-2024-7264"],
+      "summary": "ASN.1 date parser overread",
+      "severity": "Low",
+      "ranges": [{"introduced": "7.32.0", "fixed": "8.9.1"}],
+      "affects": "both",
+      "requires": {},
+      "withdrawn": null,
+      "published": "2024-07-31T08:00:00.00Z",
+      "modified": "2026-05-19T11:21:50.00Z",
+      "sources": [
+        "https://curl.se/docs/CVE-2024-7264.json",
+        "https://curl.se/docs/CVE-2024-7264.html"
+      ],
+      "notes": "DISAGREEMENT: the OSS Security KB curl page states fixed=8.9.0; the upstream feed gives fixed=8.9.1 and last_affected=8.9.0, i.e. 8.9.0 is still affected. This record uses the upstream feed value (8.9.1); the KB page is wrong here."
+    },
+    {
+      "id": "CURL-CVE-2024-8096",
+      "aliases": ["CVE-2024-8096"],
+      "summary": "OCSP stapling bypass with GnuTLS",
+      "severity": "Medium",
+      "ranges": [{"introduced": "7.41.0", "fixed": "8.10.0"}],
+      "affects": "both",
+      "requires": {"tls_backend": "gnutls"},
+      "withdrawn": null,
+      "published": "2024-09-11T08:00:00.00Z",
+      "modified": "2026-04-25T17:48:46.00Z",
+      "sources": [
+        "https://curl.se/docs/CVE-2024-8096.json",
+        "https://curl.se/docs/CVE-2024-8096.html"
+      ],
+      "notes": "Applicability qualifier confirmed by fetching https://curl.se/docs/CVE-2024-8096.html on 2026-09-08: \"This issue only exists when curl is built to use the GnuTLS library\" and \"The vulnerable code can only be reached when curl is built to use GnuTLS.\" This is not a structured field in the feed; requires.tls_backend was set from that advisory prose. Homebrew core curl depends on openssl@3, never GnuTLS, so a core-tap install resolves to no-known-match for this record."
+    },
+    {
+      "id": "CURL-CVE-2025-0167",
+      "aliases": ["CVE-2025-0167"],
+      "summary": "netrc and default credential leak",
+      "severity": "Low",
+      "ranges": [{"introduced": "7.76.0", "fixed": "8.12.0"}],
+      "affects": "both",
+      "requires": {},
+      "withdrawn": null,
+      "published": "2025-02-05T08:00:00.00Z",
+      "modified": "2026-04-25T17:48:46.00Z",
+      "sources": [
+        "https://curl.se/docs/CVE-2025-0167.json",
+        "https://curl.se/docs/CVE-2025-0167.html"
+      ],
+      "notes": "last_affected 8.11.1 per feed. No applicability qualifier beyond the version range: the flaw requires a specific .netrc `default` entry shape at runtime, not a specific build configuration."
+    }
+  ]
+}

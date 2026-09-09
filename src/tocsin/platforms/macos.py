@@ -2,10 +2,12 @@
 
 `parse_brew` turns `brew info --json=v2 --installed` output into the
 shared `Package` vocabulary. `inventory_brew` runs that command through
-the bounded runner, parses it, and produces a `CheckResult` where every
-package is an `unassessed` finding (no reviewed advisory adapter exists
-for Homebrew formulae yet -- Task 5 adds one for curl) carrying whatever
-KB context is available.
+the bounded runner, parses it, and produces a `CheckResult` carrying
+whatever KB context is available. Every package is an `unassessed`
+finding except curl, which `tocsin.adapters.curl.assess_curl` evaluates
+against a reviewed advisory snapshot -- the first (and so far only)
+Homebrew formula with real vulnerability coverage; everything else has
+no reviewed advisory adapter yet.
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 
+from tocsin.adapters.curl import assess_curl, load_records
 from tocsin.kb import kb_metadata as _kb_metadata
 from tocsin.kb import kb_unreadable_reason as _kb_unreadable_reason
 from tocsin.kb import read_kb
@@ -246,6 +249,21 @@ def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command)
 
     findings: list[Finding] = []
     serialized_packages: list[dict[str, object]] = []
+
+    # curl is the first (and so far only) Homebrew formula with a reviewed
+    # advisory adapter (Task 5); every other formula stays unassessed. The
+    # snapshot is loaded at most once per inventory run and reused for every
+    # curl Package (a formula can have more than one "installed" entry).
+    # If loading fails (corrupt or malformed snapshot file), curl falls
+    # back to the generic unassessed finding and the failure is surfaced
+    # in `errors`, downgrading completion to partial rather than silently
+    # losing curl's coverage or crashing the whole inventory.
+    curl_records: list[dict] | None = None
+    curl_load_error: str | None = None
+    curl_load_attempted = False
+    curl_assessment_metadata: dict[str, object] | None = None
+    assessed_count = 0
+
     for package in packages:
         if kb_unreadable_reason is not None:
             # --kb was given but the path itself is unusable: the
@@ -254,28 +272,44 @@ def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command)
             context: dict[str, object] = {'status': 'unavailable', 'reason': kb_unreadable_reason}
         else:
             context = _kb_context_for(package, kb_root)
-        subject = f'{package.name} {package.version}'
-        is_cask = package.ecosystem == 'homebrew-cask'
-        action = (
-            'casks are outside initial vulnerability coverage'
-            if is_cask
-            else 'no reviewed advisory adapter for this formula'
-        )
-        evidence: tuple[str, ...] = ()
-        source_url = context.get('source_url') if context.get('status') == 'found' else None
-        if source_url:
-            evidence = (source_url,)
 
-        findings.append(Finding(
-            category='package',
-            subject=subject,
-            status='unassessed',
-            severity='unknown',
-            confidence='high',
-            evidence=evidence,
-            action=action,
-            observed_at=observed_at,
-        ))
+        is_curl = package.ecosystem == 'homebrew' and package.name == 'curl'
+        if is_curl and not curl_load_attempted:
+            curl_load_attempted = True
+            try:
+                curl_records = load_records()
+            except (OSError, ValueError) as exc:
+                curl_load_error = f'could not load curl advisory snapshot: {exc}'
+
+        if is_curl and curl_records is not None:
+            curl_result = assess_curl(package, curl_records, observed_at=observed_at)
+            findings.extend(curl_result.findings)
+            curl_assessment_metadata = curl_result.metadata
+            assessed_count += 1
+        else:
+            subject = f'{package.name} {package.version}'
+            is_cask = package.ecosystem == 'homebrew-cask'
+            action = (
+                'casks are outside initial vulnerability coverage'
+                if is_cask
+                else 'no reviewed advisory adapter for this formula'
+            )
+            evidence: tuple[str, ...] = ()
+            source_url = context.get('source_url') if context.get('status') == 'found' else None
+            if source_url:
+                evidence = (source_url,)
+
+            findings.append(Finding(
+                category='package',
+                subject=subject,
+                status='unassessed',
+                severity='unknown',
+                confidence='high',
+                evidence=evidence,
+                action=action,
+                observed_at=observed_at,
+            ))
+
         serialized_packages.append({
             'ecosystem': package.ecosystem,
             'name': package.name,
@@ -284,19 +318,27 @@ def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command)
             'kb': context,
         })
 
-    metadata: dict[str, object] = {
-        'packages': serialized_packages,
-        'kb': kb_metadata,
-        'coverage': {'assessed': 0, 'unassessed': len(packages)},
-        'command': argv,
-    }
-
+    errors: list[str] = []
+    completion = 'complete'
     if kb_unreadable_reason is not None:
         # The inventory itself completed; only the requested KB context
         # could not be attached, so this is partial, not an error.
-        return CheckResult(
-            name='brew', completion='partial', findings=tuple(findings),
-            errors=(kb_unreadable_reason,), metadata=metadata,
-        )
+        errors.append(kb_unreadable_reason)
+        completion = 'partial'
+    if curl_load_error is not None:
+        errors.append(curl_load_error)
+        completion = 'partial'
 
-    return CheckResult(name='brew', completion='complete', findings=tuple(findings), errors=(), metadata=metadata)
+    metadata: dict[str, object] = {
+        'packages': serialized_packages,
+        'kb': kb_metadata,
+        'coverage': {'assessed': assessed_count, 'unassessed': len(packages) - assessed_count},
+        'command': argv,
+    }
+    if curl_assessment_metadata is not None:
+        metadata['assessments'] = {'curl': curl_assessment_metadata}
+
+    return CheckResult(
+        name='brew', completion=completion, findings=tuple(findings),
+        errors=tuple(errors), metadata=metadata,
+    )
