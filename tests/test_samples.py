@@ -116,7 +116,7 @@ def _generate(monkeypatch, tmp_path: Path, fmt: str) -> str:
     placeholders below, exactly as the original one-off generation
     script did.
     """
-    monkeypatch.setattr(cli_module, "_now_iso", lambda: FIXED_GENERATED_AT)
+    monkeypatch.setattr(cli_module, "now_iso", lambda: FIXED_GENERATED_AT)
     # The published sample's "host": "Darwin" -- and reaching every
     # adapter at all, since supported_capabilities() is empty elsewhere --
     # must hold regardless of the actual host generating/verifying this

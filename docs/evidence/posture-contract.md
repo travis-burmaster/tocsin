@@ -73,7 +73,7 @@ only on a line after the first is never matched.
 
 Evidence always includes `command: <argv joined>`, `rc: <n>`, and the
 first non-empty line of raw output (escaped for control characters via
-`tocsin.adapters.clamav._escape_control_chars`, reused rather than
+`tocsin.common.escape_control_chars`, reused rather than
 re-implemented); a runner failure adds a `reason: ...` evidence line.
 
 Completion is `error` only if every one of the five setting commands

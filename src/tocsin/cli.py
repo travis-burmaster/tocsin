@@ -7,12 +7,12 @@ import os
 import platform
 import shutil
 import sys
-from datetime import datetime, timezone
 from pathlib import Path
 
 from tocsin.adapters.clamav import doctor_summary as clamav_doctor_summary
 from tocsin.adapters.clamav import scan_files
 from tocsin.adapters.osv import scan_project, version_compatibility
+from tocsin.common import now_iso
 from tocsin.kb import kb_snapshot
 from tocsin.models import CheckResult, Runner
 from tocsin.platforms import supported_capabilities
@@ -42,10 +42,6 @@ _PRIVACY_EPILOG = (
     "  Reports written with --output are created with file mode 0600;\n"
     "  stdout output is left to the terminal.\n"
 )
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -109,7 +105,9 @@ def _write_output(path: str, content: str, overwrite: bool) -> bool:
         fd = os.open(path, flags, 0o600)
     except FileExistsError:
         return False
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    # newline="\n": the report is written byte-for-byte as rendered, so a
+    # Windows host does not silently translate every "\n" to "\r\n".
+    with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
         handle.write(content)
     os.chmod(path, 0o600)
     return True
@@ -263,8 +261,8 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
 
     # One run timestamp, generated here and passed to every adapter this
     # scan calls, so every Finding's observed_at and the JSON report's
-    # generated_at agree exactly -- never one _now_iso() call per adapter.
-    run_timestamp = _now_iso()
+    # generated_at agree exactly -- never one now_iso() call per adapter.
+    run_timestamp = now_iso()
 
     results: list[CheckResult] = []
     try:

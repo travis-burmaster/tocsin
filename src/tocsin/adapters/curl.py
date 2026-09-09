@@ -49,9 +49,9 @@ from __future__ import annotations
 
 import importlib.resources
 import json
-from datetime import datetime, timezone
 from pathlib import Path
 
+from tocsin.common import now_iso as _now_iso
 from tocsin.models import CheckResult, Finding, Package
 
 # The snapshot header fields (source, retrieval/review dates, reviewer)
@@ -140,10 +140,6 @@ def _base_evidence(record: dict, ranges: list[tuple[str, str]]) -> tuple[str, ..
     record_id = str(record.get('id', '?'))
     aliases = tuple(str(a) for a in (record.get('aliases') or ()))
     return (record_id,) + aliases + _range_evidence(ranges) + _record_sources(record)
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def _snapshot_metadata() -> dict[str, object]:

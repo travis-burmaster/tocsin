@@ -298,6 +298,31 @@ def test_shipped_snapshot_matches_known_cve_boundary():
     assert any(f.status == 'detected' for f in result.findings)
 
 
+@pytest.mark.parametrize(
+    'cve, detected_version, clean_version',
+    [
+        # Both records document a DISAGREEMENT with the OSS Security KB
+        # curl page (see docs/evidence/curl-advisories.md): the snapshot
+        # follows the upstream feed's SEMVER range, so the boundary sits
+        # one release later than the KB claims. These pins fail loudly if
+        # a future snapshot edit silently adopts the KB's value.
+        ('CVE-2024-7264', '8.9.0', '8.9.1'),   # KB says fixed=8.9.0; feed says 8.9.1
+        ('CVE-2024-2004', '8.6.0', '8.7.0'),   # KB says fixed=8.7.1; feed says 8.7.0
+    ],
+)
+def test_shipped_snapshot_pins_feed_favoured_boundaries(cve, detected_version, clean_version):
+    records = load_records(DEFAULT_RECORDS)
+
+    def cve_findings(version):
+        package = Package('homebrew', 'curl', version, {'tap': 'homebrew/core'})
+        result = assess_curl(package, records)
+        return [f for f in result.findings if cve in f.evidence]
+
+    (detected,) = cve_findings(detected_version)
+    assert detected.status == 'detected'  # core tap: provenance is known
+    assert not cve_findings(clean_version)
+
+
 def test_shipped_snapshot_current_stable_is_no_known_match():
     records = load_records(DEFAULT_RECORDS)
     package = Package('homebrew', 'curl', '8.21.0', {'tap': 'homebrew/core'})

@@ -10,8 +10,9 @@ Homebrew formula with real vulnerability coverage; everything else has
 no reviewed advisory adapter yet.
 
 macOS security posture and startup review (`scan_posture`,
-`parse_setting`) live in the sibling module `tocsin.platforms.macos_posture`;
-that module imports `_now_iso` from here rather than duplicating it.
+`parse_setting`) live in the sibling module `tocsin.platforms.macos_posture`.
+Both modules take the shared timestamp, runner-failure, and escaping
+helpers from `tocsin.common`.
 """
 
 from __future__ import annotations
@@ -19,10 +20,11 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 
 from tocsin.adapters.curl import assess_curl, load_records
+from tocsin.common import RUNNER_FAILURE_TO_COMPLETION as _RUNNER_FAILURE_TO_COMPLETION
+from tocsin.common import now_iso as _now_iso
 from tocsin.kb import kb_metadata as _kb_metadata
 from tocsin.kb import kb_unreadable_reason as _kb_unreadable_reason
 from tocsin.kb import read_kb
@@ -38,13 +40,6 @@ _CORE_TAP = 'homebrew/core'
 # Splits a Homebrew revision suffix, e.g. "8.0.0_1" -> version "8.0.0",
 # revision "1", so downstream matchers never see the underscore form.
 _REVISION_SUFFIX_RE = re.compile(r'^(?P<version>.+)_(?P<revision>\d+)$')
-
-_RUNNER_FAILURE_TO_COMPLETION = {
-    'timeout': 'partial',
-    'output-limit': 'partial',
-    'cancelled': 'partial',
-    'permission': 'error',
-}
 
 
 def _split_revision(raw_version: str) -> tuple[str, str | None]:
@@ -147,10 +142,6 @@ def parse_brew(payload: str) -> list[Package]:
         packages.extend(_cask_packages(cask))
 
     return packages
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def _kb_context_for(package: Package, kb_root: Path | None) -> dict[str, object]:

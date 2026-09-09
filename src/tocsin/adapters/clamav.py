@@ -38,9 +38,11 @@ import shutil
 import stat as stat_module
 import tempfile
 from dataclasses import dataclass
-from datetime import datetime, timezone
 from pathlib import Path
 
+from tocsin.common import RUNNER_FAILURE_TO_COMPLETION as _RUNNER_FAILURE_TO_COMPLETION
+from tocsin.common import escape_control_chars as _escape_control_chars
+from tocsin.common import now_iso as _now_iso
 from tocsin.models import CheckResult, Finding, Runner
 from tocsin.runner import run_command
 
@@ -83,13 +85,6 @@ _OTHER_REQUIRED_FLAGS = (
     '--file-list',
 )
 
-_RUNNER_FAILURE_TO_COMPLETION = {
-    'timeout': 'partial',
-    'output-limit': 'partial',
-    'cancelled': 'partial',
-    'permission': 'error',
-}
-
 _VERSION_RE = re.compile(r'^ClamAV\s+([^/\s]+)/([^/\s]+)/(.+)$')
 
 _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
@@ -107,29 +102,6 @@ _SUMMARY_KEY_MAP = {
 _ERROR_TRIGGERS = ("Can't open file", 'Access denied', 'LibClamAV Error', 'ERROR:')
 _MAX_ERROR_LINES = 50
 _MAX_ERROR_LINE_LEN = 500
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
-
-
-def _escape_control_chars(value: str) -> str:
-    """Escape control characters (and DEL) as literal \\xHH so a hostile
-    filename cannot alter the terminal or report output. Also escapes a
-    lone surrogate code point (0xdc80-0xdcff) the way `os.fsdecode`'s
-    'surrogateescape' error handler represents a non-UTF-8 byte from a
-    filename, recovering the original byte value, so a non-UTF-8 filename
-    can still be named safely in a report string."""
-    out = []
-    for ch in value:
-        code_point = ord(ch)
-        if code_point < 0x20 or code_point == 0x7f:
-            out.append(f'\\x{code_point:02x}')
-        elif 0xdc80 <= code_point <= 0xdcff:
-            out.append(f'\\x{code_point - 0xdc00:02x}')
-        else:
-            out.append(ch)
-    return ''.join(out)
 
 
 def _ambiguity_reason(path_str: str) -> str | None:

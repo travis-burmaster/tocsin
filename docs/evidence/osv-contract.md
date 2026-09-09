@@ -202,7 +202,7 @@ nothing parseable to preserve.
 ## Local integration run
 
 Ran the real tested binary (v2.5.1, at
-`/Users/example/tools/osv-scanner`,
+`/Users/example/osvtest/tools/osv-scanner`,
 not part of this repository) against a scratch `requirements.txt`
 containing `requests==2.19.0`, offline, with the populated PyPI-only
 offline database at

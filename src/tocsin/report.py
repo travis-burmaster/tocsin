@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 
+from tocsin.common import escape_control_chars as _escape_control_chars
 from tocsin.models import CheckResult, Finding
 
 INCOMPLETE_STATUSES = {'error', 'skipped'}
@@ -25,23 +26,6 @@ def exit_code(results: list[CheckResult]) -> int:
     if any(f.status in ACTIONABLE_STATUSES for r in results for f in r.findings):
         return 1
     return 0
-
-
-def _escape_control_chars(value: str) -> str:
-    """Escape control characters so hostile strings cannot alter the terminal.
-
-    Every character below 0x20, plus DEL (0x7f), is rendered as a literal
-    \\xHH escape. Everything else, including non-ASCII printable text, is
-    passed through unchanged.
-    """
-    out = []
-    for ch in value:
-        code_point = ord(ch)
-        if code_point < 0x20 or code_point == 0x7f:
-            out.append(f"\\x{code_point:02x}")
-        else:
-            out.append(ch)
-    return "".join(out)
 
 
 def _finding_to_dict(finding: Finding) -> dict[str, object]:

@@ -18,9 +18,9 @@ import platform
 import plistlib
 from pathlib import Path
 
-from tocsin.adapters.clamav import _escape_control_chars
+from tocsin.common import escape_control_chars as _escape_control_chars
+from tocsin.common import now_iso as _now_iso
 from tocsin.models import CheckResult, Finding, Runner
-from tocsin.platforms.macos import _now_iso
 from tocsin.runner import run_command
 
 # --- macOS security posture and startup review ------------------------------
@@ -51,8 +51,9 @@ _SETTING_DISPLAY_NAMES = {
 
 # Recognized command-output phrases, captured read-only on the reference
 # Mac (macOS 26.6.2 build 25G83, arm64) -- see posture-research.md and
-# docs/evidence/posture-contract.md. Matched as substrings of the first
-# non-empty output line, case-sensitively, only when the command exited 0.
+# docs/evidence/posture-contract.md. Matched by exact, case-sensitive
+# equality against the whole first non-empty output line (never as a
+# substring -- see parse_setting), and only when the command exited 0.
 # Anything else -- nonzero exit, empty output, changed or unrecognized
 # wording (including csrutil's "Custom Configuration" and any future
 # deprecation notice) -- is 'unknown' rather than guessed.

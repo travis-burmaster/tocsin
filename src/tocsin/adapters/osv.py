@@ -29,9 +29,10 @@ from __future__ import annotations
 import json
 import re
 import shutil
-from datetime import datetime, timezone
 from pathlib import Path
 
+from tocsin.common import RUNNER_FAILURE_TO_COMPLETION as _RUNNER_FAILURE_TO_COMPLETION
+from tocsin.common import now_iso as _now_iso
 from tocsin.kb import kb_metadata, kb_unreadable_reason, read_kb
 from tocsin.models import CheckResult, Finding, Package, Runner
 from tocsin.runner import run_command
@@ -77,16 +78,6 @@ _ECOSYSTEM_KB_MAP = {
     'NuGet': 'dotnet',
 }
 
-# Mirrors the mapping Task 3 (platforms/macos.py) uses for the bounded
-# runner's failure vocabulary, applied identically to both the version
-# guard and the scan invocation.
-_RUNNER_FAILURE_TO_COMPLETION = {
-    'timeout': 'partial',
-    'output-limit': 'partial',
-    'cancelled': 'partial',
-    'permission': 'error',
-}
-
 # Fixed OSV-Scanner exit codes (see docs/evidence/osv-contract.md) that map
 # to a fixed error message regardless of stderr content.
 _FIXED_ERROR_BY_RC = {
@@ -97,10 +88,6 @@ _FIXED_ERROR_BY_RC = {
 _NO_MANIFESTS_ACTION = (
     "no supported dependency manifests detected; coverage is the engine's supported manifest list"
 )
-
-
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
 
 
 def _parse_version(text: str) -> tuple[int, int, int] | None:
