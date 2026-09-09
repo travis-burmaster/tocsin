@@ -89,6 +89,7 @@ def test_error_completion_never_looks_clean(monkeypatch, tmp_path):
     assert exit_code([result]) == 2
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='creating a symlink requires elevated privilege on Windows')
 def test_symlink_inside_root_not_followed(monkeypatch, tmp_path):
     _fake_which(monkeypatch)
     real_dir = tmp_path / 'real'
@@ -590,6 +591,7 @@ def test_summary_absent_keys_are_none():
 
 # --- temp file handling ---------------------------------------------------------
 
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX file-mode bits (0600) do not apply on Windows')
 def test_temp_file_mode_0600_and_deleted_after(monkeypatch, tmp_path):
     _fake_which(monkeypatch)
     (tmp_path / 'a.txt').write_text('hi')

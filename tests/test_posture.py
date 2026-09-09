@@ -254,6 +254,7 @@ def test_missing_launch_dir_has_status_missing_no_error(tmp_path):
     assert result.completion == 'complete'
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='os.geteuid and chmod-based permission denial are POSIX-only')
 def test_denied_launch_dir_is_error_string_and_partial(tmp_path):
     if os.geteuid() == 0:
         pytest.skip('root can read any directory regardless of mode')
@@ -271,6 +272,7 @@ def test_denied_launch_dir_is_error_string_and_partial(tmp_path):
     assert len(result.errors) == 1
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='os.geteuid and chmod-based permission denial are POSIX-only')
 def test_launch_dir_with_unsearchable_parent_is_denied_and_partial(tmp_path):
     # Path.exists() itself can raise (EACCES/EPERM statting through an
     # unsearchable parent, e.g. a TCC-restricted path under ~/Library) --
@@ -424,6 +426,7 @@ def test_disabled_true_recorded_in_evidence(tmp_path):
     assert 'Disabled: true' in finding.evidence
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='creating a symlink requires elevated privilege on Windows')
 def test_symlinked_plist_skipped_and_counted(tmp_path):
     real_dir = tmp_path / 'real'
     real_dir.mkdir()

@@ -1,7 +1,10 @@
 import json
+import os
 import platform
 import stat
 from pathlib import Path
+
+import pytest
 
 from tocsin.adapters import clamav as clamav_module
 from tocsin.adapters import osv as osv_module
@@ -18,6 +21,7 @@ def test_empty_scope_rejected():
     assert main(['scan']) == 2
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX file-mode bits (0600) do not apply on Windows')
 def test_output_file_created_with_mode_0600(tmp_path):
     output = tmp_path / "report.json"
     missing = tmp_path / "does-not-exist"
@@ -47,6 +51,7 @@ def test_existing_output_rejected_without_overwrite(tmp_path, capsys):
     assert "overwrite" in captured.err
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='POSIX file-mode bits (0600) do not apply on Windows')
 def test_existing_output_replaced_with_overwrite(tmp_path):
     output = tmp_path / "report.json"
     output.write_text("pre-existing content")

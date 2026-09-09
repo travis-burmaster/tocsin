@@ -136,6 +136,7 @@ def test_oversized_page_is_malformed(tmp_path):
     assert context['status'] == 'malformed'
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='creating a symlink requires elevated privilege on Windows')
 def test_symlink_escape_is_rejected(tmp_path):
     kb_root = tmp_path / 'kb'
     outside = tmp_path / 'outside'

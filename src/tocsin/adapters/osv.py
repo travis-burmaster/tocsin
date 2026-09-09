@@ -623,7 +623,8 @@ def _handle_parseable_rc(*, stdout: str, stderr: str, path: Path, kb_root: Path 
 
 
 def scan_project(path: Path, *, online: bool, database: Path | None,
-                  kb_root: Path | None = None, runner: Runner = run_command) -> CheckResult:
+                  kb_root: Path | None = None, runner: Runner = run_command,
+                  observed_at: str | None = None) -> CheckResult:
     """Check a project's dependency manifests for known vulnerabilities.
 
     Runs OSV-Scanner (`scan source --recursive --no-resolve --format
@@ -635,9 +636,12 @@ def scan_project(path: Path, *, online: bool, database: Path | None,
     running the engine at all. In online mode `database` is always
     ignored (and reported as `None` in metadata) -- the engine never
     receives it, since `OSV_SCANNER_LOCAL_DB_CACHE_DIRECTORY` is only set
-    for an offline run.
+    for an offline run. `observed_at` defaults to the current UTC time
+    when omitted; the CLI passes one run timestamp shared by every
+    adapter it calls.
     """
-    observed_at = _now_iso()
+    if observed_at is None:
+        observed_at = _now_iso()
     path = Path(path).resolve()
 
     osv_path = shutil.which('osv-scanner')

@@ -7,6 +7,7 @@ import os
 import platform
 import shutil
 import sys
+from datetime import datetime, timezone
 from pathlib import Path
 
 from tocsin.adapters.clamav import doctor_summary as clamav_doctor_summary
@@ -32,6 +33,19 @@ _ENGINE_EXECUTABLES = ("brew", "clamscan", "osv-scanner")
 _SCAN_BOOL_SCOPES = frozenset({"brew", "posture"})
 _SCAN_SCOPE_ORDER = ("brew", "files", "project", "posture")
 
+_PRIVACY_EPILOG = (
+    "Privacy:\n"
+    "  By default, every scan operation is local: no data leaves this\n"
+    "  machine. The one exception is --online, which transmits package\n"
+    "  names and versions to the OSV advisory service for the --project\n"
+    "  scope. File contents and reports are never uploaded by Tocsin.\n"
+    "  Reports (stdout or --output) are written with file mode 0600.\n"
+)
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(prog="tocsin", description=(
@@ -46,7 +60,12 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     doctor.add_argument("--kb", metavar="PATH", help="Report readability of a local knowledge-base checkout.")
 
-    scan = subparsers.add_parser("scan", help="Run one or more scan scopes.")
+    scan = subparsers.add_parser(
+        "scan",
+        help="Run one or more scan scopes.",
+        epilog=_PRIVACY_EPILOG,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
     scan.add_argument("--brew", action="store_true", help="Inventory Homebrew packages and posture.")
     scan.add_argument("--files", metavar="PATH", help="Scan selected files or a selected folder.")
     scan.add_argument("--project", metavar="PATH", help="Check project dependencies for known vulnerabilities.")
@@ -177,59 +196,99 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
             return f"{scope} is not supported on this platform ({system})"
         return f"the {scope} adapter is not integrated yet"
 
+    # One run timestamp, generated here and passed to every adapter this
+    # scan calls, so every Finding's observed_at and the JSON report's
+    # generated_at agree exactly -- never one _now_iso() call per adapter.
+    run_timestamp = _now_iso()
+
     results: list[CheckResult] = []
-    for scope in requested_scopes:
-        if scope == "brew" and scope in capabilities:
-            kb_root = Path(args.kb) if args.kb else None
-            results.append(inventory_brew(kb_root=kb_root, runner=runner))
-            continue
-        if scope == "files" and scope in capabilities:
-            files_path = Path(args.files)
-            if not files_path.exists():
-                results.append(CheckResult(
-                    name="files",
-                    completion="error",
-                    findings=(),
-                    errors=(f"--files path does not exist: {files_path}",),
-                    metadata={},
+    try:
+        for scope in requested_scopes:
+            if scope == "brew" and scope in capabilities:
+                kb_root = Path(args.kb) if args.kb else None
+                results.append(inventory_brew(kb_root=kb_root, runner=runner, observed_at=run_timestamp))
+                continue
+            if scope == "files" and scope in capabilities:
+                files_path = Path(args.files)
+                if not files_path.exists():
+                    results.append(CheckResult(
+                        name="files",
+                        completion="error",
+                        findings=(),
+                        errors=(f"--files path does not exist: {files_path}",),
+                        metadata={},
+                    ))
+                    continue
+                results.append(scan_files(files_path.resolve(), runner=runner, observed_at=run_timestamp))
+                continue
+            if scope == "posture" and scope in capabilities:
+                results.append(scan_posture(runner=runner, observed_at=run_timestamp))
+                continue
+            if scope == "project" and scope in capabilities:
+                project_path = Path(args.project)
+                if not project_path.is_dir():
+                    results.append(CheckResult(
+                        name="project",
+                        completion="error",
+                        findings=(),
+                        errors=(f"--project path does not exist or is not a directory: {project_path}",),
+                        metadata={},
+                    ))
+                    continue
+                kb_root = Path(args.kb) if args.kb else None
+                database = Path(args.osv_database) if args.osv_database else None
+                results.append(scan_project(
+                    project_path.resolve(),
+                    online=args.online,
+                    database=database,
+                    kb_root=kb_root,
+                    runner=runner,
+                    observed_at=run_timestamp,
                 ))
                 continue
-            results.append(scan_files(files_path.resolve(), runner=runner))
-            continue
-        if scope == "posture" and scope in capabilities:
-            results.append(scan_posture(runner=runner))
-            continue
-        if scope == "project" and scope in capabilities:
-            project_path = Path(args.project)
-            if not project_path.is_dir():
-                results.append(CheckResult(
-                    name="project",
-                    completion="error",
-                    findings=(),
-                    errors=(f"--project path does not exist or is not a directory: {project_path}",),
-                    metadata={},
-                ))
-                continue
-            kb_root = Path(args.kb) if args.kb else None
-            database = Path(args.osv_database) if args.osv_database else None
-            results.append(scan_project(
-                project_path.resolve(),
-                online=args.online,
-                database=database,
-                kb_root=kb_root,
-                runner=runner,
+            results.append(CheckResult(
+                name=scope,
+                completion="unavailable",
+                findings=(),
+                errors=(_unavailable_reason(scope),),
+                metadata={},
             ))
-            continue
+    except KeyboardInterrupt as interrupt:
+        # The bounded runner already killed the child process group (and
+        # its own re-raise of KeyboardInterrupt attaches the partial
+        # CommandResult as `interrupt.command_result`, if a real
+        # subprocess was ever started for this scope). Stop immediately:
+        # the scope that was running becomes 'partial' with whatever
+        # findings were collected so far -- none, in practice, since an
+        # adapter that raises never returns a CheckResult to append them
+        # from -- and every scope after it is recorded 'unavailable'
+        # rather than silently dropped.
+        interrupted_scope = requested_scopes[len(results)]
+        command_result = getattr(interrupt, "command_result", None)
+        metadata: dict[str, object] = {"cancelled": True}
+        if command_result is not None:
+            metadata["command_result"] = {
+                "returncode": command_result.returncode,
+                "failure": command_result.failure,
+            }
         results.append(CheckResult(
-            name=scope,
-            completion="unavailable",
+            name=interrupted_scope,
+            completion="partial",
             findings=(),
-            errors=(_unavailable_reason(scope),),
-            metadata={},
+            errors=("cancelled by user",),
+            metadata=metadata,
         ))
+        for remaining_scope in requested_scopes[len(results):]:
+            results.append(CheckResult(
+                name=remaining_scope,
+                completion="unavailable",
+                findings=(),
+                errors=("not run: scan cancelled",),
+                metadata={},
+            ))
 
     context = {
-        "generated_at": None,
+        "generated_at": run_timestamp,
         "platform": system,
         "architecture": platform.machine(),
         "requested_scopes": requested_scopes,

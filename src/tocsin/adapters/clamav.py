@@ -251,7 +251,8 @@ def _is_summary_line(line: str) -> bool:
     return key in _SUMMARY_KEY_MAP
 
 
-def parse_clamscan_output(stdout: str, stderr: str, requested: list[Path]) -> ParsedScan:
+def parse_clamscan_output(stdout: str, stderr: str, requested: list[Path], *,
+                           observed_at: str | None = None) -> ParsedScan:
     """Parse `clamscan --stdout --infected` output into a ParsedScan.
 
     Pure function of the captured text and the set of paths that were
@@ -279,7 +280,8 @@ def parse_clamscan_output(stdout: str, stderr: str, requested: list[Path]) -> Pa
     clamscan does not emit per-file Finding-worthy structure for these,
     just diagnostic text.
     """
-    observed_at = _now_iso()
+    if observed_at is None:
+        observed_at = _now_iso()
     requested_set = {str(p) for p in requested}
 
     detections: list[Finding] = []
@@ -489,8 +491,9 @@ def _handle_regular_file(file_path: Path, enum: _Enumeration, *, max_files: int,
     enum.accepted.append(file_path)
 
 
-def _enumerate_files(root: Path, *, max_files: int) -> _Enumeration:
-    observed_at = _now_iso()
+def _enumerate_files(root: Path, *, max_files: int, observed_at: str | None = None) -> _Enumeration:
+    if observed_at is None:
+        observed_at = _now_iso()
     enum = _Enumeration(accepted=[], files_requested=0, symlinks_skipped=0, ambiguous_findings=[], other_findings=[], cap_exceeded=False)
 
     if root.is_file():
@@ -562,15 +565,19 @@ def _drop_trailing_partial_line(text: str) -> str:
 # --- the adapter entry point --------------------------------------------------
 
 
-def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
+def scan_files(path: Path, *, runner: Runner = run_command, observed_at: str | None = None) -> CheckResult:
     """Scan a caller-selected file or directory with clamscan.
 
     Enumerates regular files under `path` itself (never following
     symlinks, never letting clamscan recurse), writes the accepted
     absolute paths to a mode-0600 temp file, and invokes clamscan once
     with `--file-list`. See the module docstring and
-    docs/evidence/clamav-contract.md for the full contract.
+    docs/evidence/clamav-contract.md for the full contract. `observed_at`
+    defaults to the current UTC time when omitted; the CLI passes one run
+    timestamp shared by every adapter it calls.
     """
+    if observed_at is None:
+        observed_at = _now_iso()
     path = Path(path).resolve()
 
     probe = _probe_engine(runner)
@@ -585,7 +592,7 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
 
     engine_meta = probe.engine
 
-    enumeration = _enumerate_files(path, max_files=_MAX_FILES)
+    enumeration = _enumerate_files(path, max_files=_MAX_FILES, observed_at=observed_at)
 
     findings: list[Finding] = list(enumeration.ambiguous_findings) + list(enumeration.other_findings)
     errors: list[str] = []
@@ -661,7 +668,7 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
 
     if result.failure in ('timeout', 'output-limit', 'cancelled'):
         stdout = _drop_trailing_partial_line(result.stdout)
-        parsed = parse_clamscan_output(stdout, result.stderr, enumeration.accepted)
+        parsed = parse_clamscan_output(stdout, result.stderr, enumeration.accepted, observed_at=observed_at)
         findings += list(parsed.detections) + list(parsed.heuristics) + list(parsed.skipped)
         errors += list(parsed.errors)
         errors.append(f'clamscan did not complete: {result.failure}')
@@ -678,7 +685,7 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
         return CheckResult(name=_NAME, completion='error', findings=tuple(findings), errors=tuple(errors), metadata=metadata)
 
     rc = result.returncode
-    parsed = parse_clamscan_output(result.stdout, result.stderr, enumeration.accepted)
+    parsed = parse_clamscan_output(result.stdout, result.stderr, enumeration.accepted, observed_at=observed_at)
     metadata['summary'] = parsed.summary
     metadata['files_scanned'] = _files_scanned_from_summary(parsed.summary)
 

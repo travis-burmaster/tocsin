@@ -393,7 +393,8 @@ def _scan_launch_dir(directory: Path, observed_at: str) -> tuple[dict[str, objec
     return metadata, findings, [], made_partial
 
 
-def scan_posture(*, runner: Runner = run_command, launch_dirs: list[Path] | None = None) -> CheckResult:
+def scan_posture(*, runner: Runner = run_command, launch_dirs: list[Path] | None = None,
+                  observed_at: str | None = None) -> CheckResult:
     """Check macOS security posture (Gatekeeper/SIP/FileVault/firewall) and
     inventory user + system launch-time plists.
 
@@ -403,9 +404,12 @@ def scan_posture(*, runner: Runner = run_command, launch_dirs: list[Path] | None
     `~/Library/LaunchAgents`, `/Library/LaunchAgents`, and
     `/Library/LaunchDaemons`; `/System/Library/*` is out of scope (a
     documented limitation, not an oversight), and this inventory is never
-    a claim of exhaustive persistence detection.
+    a claim of exhaustive persistence detection. `observed_at` defaults to
+    the current UTC time when omitted; the CLI passes one run timestamp
+    shared by every adapter it calls.
     """
-    observed_at = _now_iso()
+    if observed_at is None:
+        observed_at = _now_iso()
     if launch_dirs is None:
         launch_dirs = _default_launch_dirs()
 

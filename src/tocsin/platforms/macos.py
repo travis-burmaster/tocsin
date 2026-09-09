@@ -188,16 +188,21 @@ def _empty_result(*, completion: str, errors: tuple[str, ...], kb_root: Path | N
     return CheckResult(name='brew', completion=completion, findings=(), errors=errors, metadata=metadata)
 
 
-def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command) -> CheckResult:
+def inventory_brew(*, kb_root: Path | None = None, runner: Runner = run_command,
+                    observed_at: str | None = None) -> CheckResult:
     """Inventory installed Homebrew formulae and casks, with KB context.
 
     Every package becomes an `unassessed` Finding: no reviewed advisory
     adapter exists for Homebrew formulae yet, so this never reports a
     clean or vulnerable verdict, only coverage. `completion` reflects
     whether the inventory itself succeeded, not whether every package was
-    assessed for vulnerabilities.
+    assessed for vulnerabilities. `observed_at` defaults to the current
+    UTC time when omitted; the CLI passes one run timestamp shared by
+    every adapter it calls so a single scan's findings and the report's
+    `generated_at` agree exactly.
     """
-    observed_at = _now_iso()
+    if observed_at is None:
+        observed_at = _now_iso()
 
     brew_path = shutil.which('brew')
     if brew_path is None:
