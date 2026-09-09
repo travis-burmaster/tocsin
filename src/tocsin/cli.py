@@ -15,7 +15,8 @@ from tocsin.adapters.osv import scan_project, version_compatibility
 from tocsin.kb import kb_snapshot
 from tocsin.models import CheckResult, Runner
 from tocsin.platforms import supported_capabilities
-from tocsin.platforms.macos import inventory_brew, scan_posture
+from tocsin.platforms.macos import inventory_brew
+from tocsin.platforms.macos_posture import scan_posture
 from tocsin.report import exit_code, render_json, render_text
 from tocsin.runner import run_command
 

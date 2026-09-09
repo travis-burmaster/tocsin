@@ -5,7 +5,7 @@ import sys
 import pytest
 
 from tocsin.models import CommandResult
-from tocsin.platforms.macos import parse_setting, scan_posture
+from tocsin.platforms.macos_posture import parse_setting, scan_posture
 from tocsin.report import exit_code
 
 SETTING_NAMES = ('gatekeeper', 'sip', 'filevault', 'firewall', 'firewall_stealth')
