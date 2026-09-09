@@ -1,0 +1,369 @@
+{
+  "schema_version": "1",
+  "generated_at": "2026-09-09T04:33:59Z",
+  "host": {
+    "platform": "Darwin",
+    "architecture": "arm64"
+  },
+  "requested_scopes": [
+    "brew",
+    "files",
+    "project"
+  ],
+  "results": [
+    {
+      "name": "brew",
+      "completion": "complete",
+      "findings": [
+        {
+          "category": "package",
+          "subject": "curl 8.0.0",
+          "status": "detected",
+          "severity": "High",
+          "confidence": "high",
+          "evidence": [
+            "CURL-CVE-2023-38545",
+            "CVE-2023-38545",
+            "range: >=7.69.0 <8.4.0",
+            "https://curl.se/docs/CVE-2023-38545.json",
+            "https://curl.se/docs/CVE-2023-38545.html"
+          ],
+          "action": "upgrade curl to 8.4.0 or later",
+          "observed_at": "2026-09-09T04:33:59Z"
+        },
+        {
+          "category": "package",
+          "subject": "curl 8.0.0",
+          "status": "detected",
+          "severity": "Low",
+          "confidence": "high",
+          "evidence": [
+            "CURL-CVE-2023-38546",
+            "CVE-2023-38546",
+            "range: >=7.9.1 <8.4.0",
+            "https://curl.se/docs/CVE-2023-38546.json",
+            "https://curl.se/docs/CVE-2023-38546.html"
+          ],
+          "action": "upgrade curl to 8.4.0 or later",
+          "observed_at": "2026-09-09T04:33:59Z"
+        },
+        {
+          "category": "package",
+          "subject": "curl 8.0.0",
+          "status": "detected",
+          "severity": "Low",
+          "confidence": "high",
+          "evidence": [
+            "CURL-CVE-2024-2004",
+            "CVE-2024-2004",
+            "range: >=7.85.0 <8.7.0",
+            "https://curl.se/docs/CVE-2024-2004.json",
+            "https://curl.se/docs/CVE-2024-2004.html"
+          ],
+          "action": "upgrade curl to 8.7.0 or later",
+          "observed_at": "2026-09-09T04:33:59Z"
+        },
+        {
+          "category": "package",
+          "subject": "curl 8.0.0",
+          "status": "detected",
+          "severity": "Low",
+          "confidence": "high",
+          "evidence": [
+            "CURL-CVE-2024-7264",
+            "CVE-2024-7264",
+            "range: >=7.32.0 <8.9.1",
+            "https://curl.se/docs/CVE-2024-7264.json",
+            "https://curl.se/docs/CVE-2024-7264.html"
+          ],
+          "action": "upgrade curl to 8.9.1 or later",
+          "observed_at": "2026-09-09T04:33:59Z"
+        },
+        {
+          "category": "package",
+          "subject": "curl 8.0.0",
+          "status": "detected",
+          "severity": "Low",
+          "confidence": "high",
+          "evidence": [
+            "CURL-CVE-2025-0167",
+            "CVE-2025-0167",
+            "range: >=7.76.0 <8.12.0",
+            "https://curl.se/docs/CVE-2025-0167.json",
+            "https://curl.se/docs/CVE-2025-0167.html"
+          ],
+          "action": "upgrade curl to 8.12.0 or later",
+          "observed_at": "2026-09-09T04:33:59Z"
+        },
+        {
+          "category": "package",
+          "subject": "openssl@3 3.6.2",
+          "status": "unassessed",
+          "severity": "unknown",
+          "confidence": "high",
+          "evidence": [
+            "https://github.com/travis-burmaster/oss-security-kb/blob/main/wiki/homebrew/openssl@3.md"
+          ],
+          "action": "no reviewed advisory adapter for this formula",
+          "observed_at": "2026-09-09T04:33:59Z"
+        }
+      ],
+      "errors": [],
+      "metadata": {
+        "packages": [
+          {
+            "ecosystem": "homebrew",
+            "name": "curl",
+            "version": "8.0.0",
+            "provenance": {
+              "kind": "formula",
+              "full_name": "curl",
+              "tap": "homebrew/core"
+            },
+            "kb": {
+              "status": "found",
+              "page": "wiki/homebrew/curl.md",
+              "title": "curl (Homebrew)",
+              "kb_status": "advisory-mapped",
+              "repository": "https://github.com/curl/curl",
+              "last_updated": "2026-07-11",
+              "audits": [],
+              "advisories": [
+                {
+                  "id": "CVE-2023-38545",
+                  "severity": "High",
+                  "fixed_in": "curl 8.4.0",
+                  "source": "https://curl.se/docs/CVE-2023-38545.html"
+                },
+                {
+                  "id": "CVE-2023-38546",
+                  "severity": "Low",
+                  "fixed_in": "curl 8.4.0",
+                  "source": "https://curl.se/docs/CVE-2023-38546.html"
+                },
+                {
+                  "id": "CVE-2024-2004",
+                  "severity": "Low",
+                  "fixed_in": "curl 8.7.1",
+                  "source": "https://curl.se/docs/CVE-2024-2004.html"
+                },
+                {
+                  "id": "CVE-2024-7264",
+                  "severity": "Medium",
+                  "fixed_in": "curl 8.9.0",
+                  "source": "https://curl.se/docs/CVE-2024-7264.html"
+                },
+                {
+                  "id": "CVE-2024-8096",
+                  "severity": "Medium",
+                  "fixed_in": "curl 8.10.0",
+                  "source": "https://curl.se/docs/CVE-2024-8096.html"
+                },
+                {
+                  "id": "CVE-2025-0167",
+                  "severity": "Medium",
+                  "fixed_in": "curl 8.12.0",
+                  "source": "https://curl.se/docs/CVE-2025-0167.html"
+                }
+              ],
+              "source_url": "https://github.com/travis-burmaster/oss-security-kb/blob/main/wiki/homebrew/curl.md"
+            }
+          },
+          {
+            "ecosystem": "homebrew",
+            "name": "openssl@3",
+            "version": "3.6.2",
+            "provenance": {
+              "kind": "formula",
+              "full_name": "openssl@3",
+              "tap": "homebrew/core"
+            },
+            "kb": {
+              "status": "found",
+              "page": "wiki/homebrew/openssl@3.md",
+              "title": "openssl@3 (homebrew)",
+              "kb_status": "baseline stub",
+              "repository": "https://github.com/openssl/openssl",
+              "last_updated": "2026-04-27",
+              "audits": [],
+              "advisories": [],
+              "source_url": "https://github.com/travis-burmaster/oss-security-kb/blob/main/wiki/homebrew/openssl@3.md"
+            }
+          }
+        ],
+        "kb": {
+          "status": "available",
+          "root": "/Users/example/oss-security-kb",
+          "commit": null,
+          "dirty": null,
+          "license": "CC BY 4.0",
+          "license_url": "https://github.com/travis-burmaster/oss-security-kb/blob/main/LICENSE",
+          "source": "https://github.com/travis-burmaster/oss-security-kb",
+          "maintainer": "Travis Burmaster"
+        },
+        "coverage": {
+          "assessed": 1,
+          "unassessed": 1
+        },
+        "command": [
+          "/opt/homebrew/bin/brew",
+          "info",
+          "--json=v2",
+          "--installed"
+        ],
+        "assessments": {
+          "curl": {
+            "records_total": 6,
+            "snapshot": {
+              "source": "https://curl.se/docs/vuln.json",
+              "source_retrieved": "2026-09-08",
+              "reviewed_at": "2026-09-08",
+              "reviewer": "Tocsin maintainers (LLM-assisted review of upstream advisories)"
+            },
+            "coverage_note": "curated snapshot of 6 upstream advisories, not the full history",
+            "records_compared": 6,
+            "skipped_withdrawn": 0,
+            "not_applicable": [
+              {
+                "id": "CURL-CVE-2024-8096",
+                "reason": "requires tls_backend=gnutls; homebrew/core curl depends on openssl@3"
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "name": "files",
+      "completion": "complete",
+      "findings": [
+        {
+          "category": "file",
+          "subject": "/Users/example/selected-files/installer.pkg",
+          "status": "detected",
+          "severity": "unknown",
+          "confidence": "high",
+          "evidence": [
+            "Eicar-Signature"
+          ],
+          "action": "quarantine or delete only after manual confirmation; Tocsin does not modify files",
+          "observed_at": "2026-09-09T04:33:59Z"
+        }
+      ],
+      "errors": [],
+      "metadata": {
+        "engine": {
+          "name": "clamav",
+          "version": "1.4.2",
+          "signature_version": "27540",
+          "signature_date": "Tue Feb 11 09:22:11 2025"
+        },
+        "limits": {
+          "max_filesize": "100M",
+          "max_scansize": "500M",
+          "max_recursion": 20,
+          "timeout_seconds": 300,
+          "max_files": 100000
+        },
+        "summary": {
+          "known_viruses": null,
+          "engine_version": null,
+          "scanned_files": "2",
+          "infected_files": "1",
+          "data_scanned": null,
+          "data_read": null,
+          "time": null
+        },
+        "files_requested": 2,
+        "files_scanned": 2,
+        "symlinks_skipped": 0,
+        "ambiguous_skipped": 0,
+        "command": [
+          "/opt/homebrew/bin/clamscan",
+          "--stdout",
+          "--infected",
+          "--alert-exceeds-max=yes",
+          "--alert-encrypted=yes",
+          "--max-filesize=100M",
+          "--max-scansize=500M",
+          "--max-recursion=20",
+          "--follow-dir-symlinks=0",
+          "--follow-file-symlinks=0",
+          "<file-list>"
+        ],
+        "root": "/Users/example/selected-files",
+        "coverage": {
+          "assessed": 2,
+          "unassessed": 0
+        }
+      }
+    },
+    {
+      "name": "project",
+      "completion": "complete",
+      "findings": [
+        {
+          "category": "dependency",
+          "subject": "requests 2.19.0 (PyPI)",
+          "status": "detected",
+          "severity": "6.1",
+          "confidence": "high",
+          "evidence": [
+            "PYSEC-2023-74",
+            "CVE-2023-32681",
+            "GHSA-j8r2-6x86-q33q",
+            "manifest: /Users/example/project/requirements.txt",
+            "https://github.com/psf/requests/security/advisories/GHSA-j8r2-6x86-q33q"
+          ],
+          "action": "upgrade to 2.31.0",
+          "observed_at": "2026-09-09T04:33:59Z"
+        }
+      ],
+      "errors": [],
+      "metadata": {
+        "packages": 1,
+        "packages_with_findings": 1,
+        "manifests": 1,
+        "manifest_paths": [
+          "/Users/example/project/requirements.txt"
+        ],
+        "packages_kb": {
+          "PyPI:requests:2.19.0": {
+            "status": "unknown",
+            "reason": "no KB page at wiki/python/requests.md"
+          }
+        },
+        "kb": {
+          "status": "available",
+          "root": "/Users/example/oss-security-kb",
+          "commit": null,
+          "dirty": null,
+          "license": "CC BY 4.0",
+          "license_url": "https://github.com/travis-burmaster/oss-security-kb/blob/main/LICENSE",
+          "source": "https://github.com/travis-burmaster/oss-security-kb",
+          "maintainer": "Travis Burmaster"
+        },
+        "coverage": {
+          "assessed": 1,
+          "unassessed": 0
+        },
+        "engine": {
+          "name": "osv-scanner",
+          "version": "2.5.1"
+        },
+        "mode": "online",
+        "database": null,
+        "command": [
+          "/opt/homebrew/bin/osv-scanner",
+          "scan",
+          "source",
+          "--recursive",
+          "--no-resolve",
+          "--format",
+          "json",
+          "/Users/example/project"
+        ]
+      }
+    }
+  ]
+}

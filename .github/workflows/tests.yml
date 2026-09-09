@@ -1,0 +1,42 @@
+name: tests
+
+# Portable fixture tests only. No secrets, no real engines (ClamAV,
+# OSV-Scanner, Homebrew) are installed here, and no scan target is the
+# runner host itself -- every adapter test in this suite injects a fake
+# Runner and reads from tests/fixtures/. The environment variables that
+# gate the optional real-engine integration tests
+# (TOCSIN_CLAMSCAN, TOCSIN_OSV_SCANNER, TOCSIN_OSV_DB) are deliberately
+# never set here, so those tests stay skipped in CI. No report or
+# artifact this workflow produces is uploaded anywhere.
+#
+# A green run here means the portable test suite passes on Linux and
+# Windows; it does NOT mean Tocsin supports scanning on those platforms.
+# See docs/coverage.md -- macOS is the only supported scan platform.
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-latest, windows-latest]
+        python-version: ["3.11", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Install Tocsin with test dependencies
+        run: pip install -e .[test]
+
+      - name: Run portable test suite
+        run: python -m pytest -q -W error::ResourceWarning

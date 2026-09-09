@@ -8,12 +8,26 @@ version = "0.1.0"
 description = "Evidence-based security scanner for malware, known software vulnerabilities, and operating-system security posture."
 requires-python = ">=3.11"
 readme = "README.md"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: MacOS",
+    "Operating System :: MacOS :: MacOS X",
+    "Topic :: Security",
+    "Environment :: Console",
+    "Private :: Do Not Upload",
+]
 
 [project.optional-dependencies]
 test = ["pytest"]
 
 [project.scripts]
 tocsin = "tocsin.cli:main"
+
+[project.urls]
+Repository = "https://github.com/travis-burmaster/tocsin"
 
 [tool.setuptools.packages.find]
 where = ["src"]
