@@ -125,10 +125,14 @@ def test_text_report_omits_coverage_line_when_no_metadata():
 
 
 def test_control_characters_escaped_in_text_report():
-    finding = Finding('malware', 'evil\x1b[31mname.bin', 'detected', 'critical',
-                       'high', ('trigger:\x07bell',), 'quarantine\nand review',
-                       '2026-09-08T00:00:00Z')
-    result = CheckResult('clamav', 'complete', (finding,), ('boom\x00',), {})
+    # severity/confidence/status come from engine JSON (see
+    # tocsin.adapters.osv, which passes a group's max_severity through as
+    # a string), and completion is interpolated the same way, so every
+    # one of them is escaped -- not only the obviously hostile fields.
+    finding = Finding('malware', 'evil\x1b[31mname.bin', 'det\x1becte\x07d',
+                       'HIGH\x1b[31m\x07', 'high\x07', ('trigger:\x07bell',),
+                       'quarantine\nand review', '2026-09-08T00:00:00Z')
+    result = CheckResult('clamav', 'comp\x1b[31mlete\x07', (finding,), ('boom\x00',), {})
 
     text = render_text([result], {'requested_scopes': ['files']})
 
@@ -139,3 +143,7 @@ def test_control_characters_escaped_in_text_report():
     assert '\\x07bell' in text
     assert '\\x00' in text
     assert '\\x0aand review' in text
+    assert 'severity=HIGH\\x1b[31m\\x07' in text
+    assert 'confidence=high\\x07' in text
+    assert 'comp\\x1b[31mlete\\x07' in text
+    assert '[det\\x1becte\\x07d]' in text

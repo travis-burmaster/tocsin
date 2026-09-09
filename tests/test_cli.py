@@ -65,6 +65,65 @@ def test_existing_output_replaced_with_overwrite(tmp_path):
     assert mode == 0o600
 
 
+def test_output_to_nonexistent_directory_is_reported_not_a_traceback(tmp_path, capsys):
+    # Path("/no/such/dir/report.txt") makes os.open raise FileNotFoundError;
+    # letting that escape main() would exit 1, which the exit policy
+    # defines as "completed with findings" -- a false clean bill.
+    output = tmp_path / "no-such-dir" / "report.txt"
+    missing = tmp_path / "does-not-exist"
+
+    code = main(['scan', '--files', str(missing), '--format', 'json', '--output', str(output)])
+
+    assert code == 2
+    err = capsys.readouterr().err
+    assert str(output) in err
+    assert not output.exists()
+
+
+@pytest.mark.skipif(os.name != 'posix', reason='os.geteuid and chmod-based permission denial are POSIX-only')
+def test_output_to_unwritable_directory_is_reported(tmp_path, capsys):
+    if os.geteuid() == 0:
+        pytest.skip('root can write to any directory regardless of mode')
+
+    denied = tmp_path / "denied"
+    denied.mkdir()
+    denied.chmod(0)
+    output = denied / "report.txt"
+    missing = tmp_path / "does-not-exist"
+
+    try:
+        code = main(['scan', '--files', str(missing), '--format', 'json', '--output', str(output)])
+    finally:
+        denied.chmod(0o700)
+
+    assert code == 2
+    assert str(output) in capsys.readouterr().err
+
+
+def test_empty_files_path_is_error_not_the_working_directory(monkeypatch, capsys, force_darwin):
+    # Path("") is Path("."), which exists: without an explicit check the
+    # scan would silently scope to the current working directory.
+    def _forbidden(*args, **kwargs):
+        raise AssertionError('runner must not be called for an empty --files path')
+
+    code = main(['scan', '--files', ''], runner=_forbidden)
+
+    assert code == 2
+    out = capsys.readouterr().out
+    assert '== files [error] ==' in out
+
+
+def test_empty_project_path_is_error_not_the_working_directory(monkeypatch, capsys, force_darwin):
+    def _forbidden(*args, **kwargs):
+        raise AssertionError('runner must not be called for an empty --project path')
+
+    code = main(['scan', '--project', '', '--online'], runner=_forbidden)
+
+    assert code == 2
+    out = capsys.readouterr().out
+    assert '== project [error] ==' in out
+
+
 def _stub_runner(argv, *, timeout, max_bytes, extra_env=None):
     # A real `brew --version` (or clamscan/osv-scanner, if ever present)
     # must never run from a test: macos-latest CI runners ship Homebrew

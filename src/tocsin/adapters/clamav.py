@@ -443,6 +443,7 @@ class _Enumeration:
     symlinks_skipped: int
     ambiguous_findings: list[Finding]
     other_findings: list[Finding]
+    unlistable_findings: list[Finding]
     cap_exceeded: bool
 
 
@@ -494,13 +495,32 @@ def _handle_regular_file(file_path: Path, enum: _Enumeration, *, max_files: int,
 def _enumerate_files(root: Path, *, max_files: int, observed_at: str | None = None) -> _Enumeration:
     if observed_at is None:
         observed_at = _now_iso()
-    enum = _Enumeration(accepted=[], files_requested=0, symlinks_skipped=0, ambiguous_findings=[], other_findings=[], cap_exceeded=False)
+    enum = _Enumeration(accepted=[], files_requested=0, symlinks_skipped=0, ambiguous_findings=[],
+                        other_findings=[], unlistable_findings=[], cap_exceeded=False)
 
     if root.is_file():
         _handle_regular_file(root, enum, max_files=max_files, observed_at=observed_at)
         return enum
 
-    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+    def _on_walk_error(exc: OSError) -> None:
+        # os.walk's default onerror is None, which SWALLOWS the error: a
+        # directory that cannot be listed (denied, vanished mid-walk)
+        # would silently contribute zero files and the scan would report
+        # 'complete' over a tree it only partly enumerated. Record it
+        # instead, so the caller can degrade to 'partial'.
+        directory = exc.filename if exc.filename is not None else str(root)
+        enum.unlistable_findings.append(Finding(
+            category='file',
+            subject=_escape_control_chars(os.fsdecode(directory)),
+            status='skipped',
+            severity='unknown',
+            confidence='high',
+            evidence=(_escape_control_chars(str(exc)),),
+            action='directory could not be listed; inspect manually',
+            observed_at=observed_at,
+        ))
+
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False, onerror=_on_walk_error):
         if enum.cap_exceeded:
             break
         kept_dirnames = []
@@ -594,9 +614,17 @@ def scan_files(path: Path, *, runner: Runner = run_command, observed_at: str | N
 
     enumeration = _enumerate_files(path, max_files=_MAX_FILES, observed_at=observed_at)
 
-    findings: list[Finding] = list(enumeration.ambiguous_findings) + list(enumeration.other_findings)
+    findings: list[Finding] = (
+        list(enumeration.ambiguous_findings)
+        + list(enumeration.other_findings)
+        + list(enumeration.unlistable_findings)
+    )
     errors: list[str] = []
-    needs_partial = bool(enumeration.ambiguous_findings) or bool(enumeration.other_findings)
+    needs_partial = (
+        bool(enumeration.ambiguous_findings)
+        or bool(enumeration.other_findings)
+        or bool(enumeration.unlistable_findings)
+    )
     if enumeration.ambiguous_findings:
         errors.append(
             f'{len(enumeration.ambiguous_findings)} file(s) skipped: ambiguous filename '
@@ -604,6 +632,11 @@ def scan_files(path: Path, *, runner: Runner = run_command, observed_at: str | N
         )
     if enumeration.other_findings:
         errors.append(f'{len(enumeration.other_findings)} file(s) skipped: could not be read for scanning')
+    if enumeration.unlistable_findings:
+        errors.append(
+            f'{len(enumeration.unlistable_findings)} directory(ies) skipped: could not be listed; '
+            'their contents were not scanned'
+        )
     if enumeration.cap_exceeded:
         needs_partial = True
         errors.append(f'enumeration cap of {_MAX_FILES} files reached; stopped enumerating additional files')

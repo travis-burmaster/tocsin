@@ -226,6 +226,21 @@ def _apply_cancellation(
         ))
 
 
+def _empty_path_error(scope: str, flag: str) -> CheckResult:
+    """The explicit error result for an empty-string path argument.
+
+    Shaped exactly like the nonexistent-path result, so an empty value is
+    reported (and exits 2) rather than resolving to Path(".").
+    """
+    return CheckResult(
+        name=scope,
+        completion="error",
+        findings=(),
+        errors=(f"{flag} was given an empty path",),
+        metadata={},
+    )
+
+
 def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
     requested_scopes = [name for name in _SCAN_SCOPE_ORDER if _scope_requested(args, name)]
     if not requested_scopes:
@@ -259,6 +274,14 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
                 results.append(inventory_brew(kb_root=kb_root, runner=runner, observed_at=run_timestamp))
                 continue
             if scope == "files" and scope in capabilities:
+                # An empty --files/--project value is 'requested' (so it is
+                # never silently dropped) but is not a usable path:
+                # Path("") is Path("."), which exists, so without this
+                # check the scan would silently scope to the current
+                # working directory instead of what the user named.
+                if not args.files:
+                    results.append(_empty_path_error("files", "--files"))
+                    continue
                 files_path = Path(args.files)
                 if not files_path.exists():
                     results.append(CheckResult(
@@ -275,6 +298,9 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
                 results.append(scan_posture(runner=runner, observed_at=run_timestamp))
                 continue
             if scope == "project" and scope in capabilities:
+                if not args.project:
+                    results.append(_empty_path_error("project", "--project"))
+                    continue
                 project_path = Path(args.project)
                 if not project_path.is_dir():
                     results.append(CheckResult(
@@ -323,7 +349,15 @@ def _run_scan(args: argparse.Namespace, *, runner: Runner = run_command) -> int:
         content = render_json(results, context) if args.format == "json" else render_text(results, context)
 
         if args.output:
-            written = _write_output(args.output, content, args.overwrite)
+            # Any OSError here (a missing parent directory, an unwritable
+            # one, a path that is a directory) is reported as an explicit
+            # failure: letting it escape main() would exit 1, which the
+            # exit policy defines as "completed with findings".
+            try:
+                written = _write_output(args.output, content, args.overwrite)
+            except OSError as exc:
+                print(f"error: could not write {args.output}: {exc}", file=sys.stderr)
+                return 2
             if not written:
                 print(
                     f"error: {args.output} already exists; pass --overwrite to replace it",

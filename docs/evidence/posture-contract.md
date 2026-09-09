@@ -61,10 +61,15 @@ only on a line after the first is never matched.
   `high`, action e.g. "Gatekeeper is disabled; enable it unless there is
   a documented reason").
 - `unknown` &rarr; `unassessed` (confidence `low`, action "could not
-  determine; inspect manually"). A runner failure of `missing` (the
-  executable simply is not present) is a coverage gap and does not make
-  the check `partial`; `permission`, `timeout`, and any other runner
-  failure do.
+  determine; inspect manually"). **Any** runner failure makes the check
+  `partial` and adds a line to `errors` -- `missing` (the executable
+  simply is not present) included, alongside `permission`, `timeout`, and
+  every other failure. A setting that could not be read is scope the
+  check did not cover, whatever the reason the command did not run;
+  reporting `complete` after five absent binaries would be a false clean
+  bill of health. (An `unknown` state reached WITHOUT a runner failure --
+  a command that ran and exited 0 with unrecognized wording -- remains a
+  coverage gap only, and does not make the check partial.)
 
 Evidence always includes `command: <argv joined>`, `rc: <n>`, and the
 first non-empty line of raw output (escaped for control characters via
@@ -73,8 +78,8 @@ re-implemented); a runner failure adds a `reason: ...` evidence line.
 
 Completion is `error` only if every one of the five setting commands
 failed specifically with a `permission` runner failure; a mix of
-failures, or any `missing`/`timeout`/other failure, degrades to `partial`
-(or stays `complete` if only `missing` occurred), never `error`. This is a
+failures, or any `missing`/`timeout`/other failure, degrades to
+`partial`, never `error`. This is a
 deliberate, controller-decided deviation from the shared runner-failure-
 to-completion map other adapters use (e.g. `brew`/`clamscan`, which treat
 a single `permission` failure as `error` immediately): a posture scan

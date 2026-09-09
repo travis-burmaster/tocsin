@@ -241,6 +241,53 @@ def test_colon_space_in_filename_is_skipped(monkeypatch, tmp_path):
     assert result.metadata['ambiguous_skipped'] == 1
 
 
+# --- unlistable directories ---------------------------------------------------
+
+@pytest.mark.skipif(os.name != 'posix', reason='os.geteuid and chmod-based permission denial are POSIX-only')
+def test_unreadable_subdirectory_is_skipped_and_partial(monkeypatch, tmp_path):
+    """A directory os.walk cannot list must never be silently omitted.
+
+    Without an `onerror` callback os.walk swallows the PermissionError and
+    the scan reports 'complete' over a tree it only partly enumerated.
+    """
+    if os.geteuid() == 0:
+        pytest.skip('root can read any directory regardless of mode')
+
+    _fake_which(monkeypatch)
+    readable = tmp_path / 'readable'
+    readable.mkdir()
+    (readable / 'a.txt').write_text('hello')
+    denied = tmp_path / 'denied'
+    denied.mkdir()
+    (denied / 'hidden.txt').write_text('secret')
+    denied.chmod(0)
+
+    captured = {}
+
+    def _scan(argv, *, timeout, max_bytes, extra_env=None):
+        list_arg = [a for a in argv if a.startswith('--file-list=')][0]
+        captured['contents'] = Path(list_arg.split('=', 1)[1]).read_text()
+        return CommandResult(0, '----------- SCAN SUMMARY -----------\nScanned files: 1\n', '', None)
+
+    try:
+        result = scan_files(tmp_path, runner=_runner(scan=_scan))
+    finally:
+        denied.chmod(0o700)
+
+    assert result.completion == 'partial'
+    skipped = [f for f in result.findings if f.status == 'skipped']
+    assert len(skipped) == 1
+    assert skipped[0].category == 'file'
+    assert str(denied) in skipped[0].subject
+    assert skipped[0].action == 'directory could not be listed; inspect manually'
+    assert skipped[0].evidence and 'denied' in skipped[0].evidence[0]
+    assert any('could not be listed' in e for e in result.errors)
+    assert exit_code([result]) == 2
+    # The readable half of the tree is still scanned.
+    assert str(readable / 'a.txt') in captured['contents']
+    assert 'hidden.txt' not in captured['contents']
+
+
 # --- FOUND line classification (through scan_files) --------------------------
 
 def test_encrypted_alert_is_skipped(monkeypatch, tmp_path):

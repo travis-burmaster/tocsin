@@ -583,7 +583,12 @@ def _with_no_manifests_finding(result: CheckResult, *, path: Path, observed_at: 
         # Preserve the completion/errors the caller already decided (e.g.
         # 'partial' with a reason, if --kb was given but unreadable):
         # zero manifests found is not itself grounds to override that.
-        name=result.name, completion=result.completion, findings=(finding,),
+        # The finding is APPENDED, never substituted for what the caller
+        # already collected: an `error` Finding naming a manifest that
+        # failed to extract is exactly why zero manifests parsed, and
+        # replacing it would erase the only evidence of the broken file.
+        name=result.name, completion=result.completion,
+        findings=result.findings + (finding,),
         errors=result.errors, metadata=metadata,
     )
 
@@ -744,7 +749,11 @@ def scan_project(path: Path, *, online: bool, database: Path | None,
         )
 
     if rc == 128:
-        # ErrNoPackagesFound: no supported manifest was found at all.
+        # ErrNoPackagesFound: no supported manifest was PARSED. That is
+        # not the same as "the project has no manifests": stderr may name
+        # a manifest that failed to extract, which is why nothing parsed.
+        # Reporting only the unassessed "no manifests" finding there would
+        # present a broken manifest as an empty project.
         kb_meta = kb_metadata(kb_root)
         unreadable_reason = kb_unreadable_reason(kb_meta)
         base_completion = 'partial' if unreadable_reason is not None else 'complete'
@@ -753,7 +762,18 @@ def scan_project(path: Path, *, online: bool, database: Path | None,
             _base_metadata(kb_root=kb_root, kb_meta=kb_meta),
             engine=engine_meta, mode=mode, database=database_str, command=argv,
         )
-        base_result = CheckResult(name=_NAME, completion=base_completion, findings=(), errors=base_errors, metadata=metadata)
+        extraction_findings = _extraction_failure_findings(stderr, observed_at=observed_at)
+        base_findings: tuple[Finding, ...] = tuple(extraction_findings)
+        if extraction_findings:
+            base_completion = 'partial'
+            bounded_tail = stderr.strip()[:_MAX_STDERR_TAIL_LEN]
+            base_errors = base_errors + (
+                f'osv-scanner reported manifest extraction failures: {bounded_tail}',
+            )
+        base_result = CheckResult(
+            name=_NAME, completion=base_completion, findings=base_findings,
+            errors=base_errors, metadata=metadata,
+        )
         return _with_no_manifests_finding(base_result, path=path, observed_at=observed_at)
 
     if rc == 127:

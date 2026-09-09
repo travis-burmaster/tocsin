@@ -123,7 +123,17 @@ def render_text(results: list[CheckResult], context: dict[str, object]) -> str:
     lines.append("")
 
     for result in results:
-        lines.append(f"== {_escape_control_chars(result.name)} [{result.completion}] ==")
+        # Every interpolated string is escaped, not just the obviously
+        # attacker-controlled ones: severity in particular comes straight
+        # out of engine JSON (see tocsin.adapters.osv, which passes a
+        # vulnerability group's max_severity through as a string), and
+        # status/completion are only conventionally from the shared
+        # vocabulary -- nothing validates them before they reach a
+        # terminal.
+        lines.append(
+            f"== {_escape_control_chars(result.name)} "
+            f"[{_escape_control_chars(result.completion)}] =="
+        )
         if result.errors:
             for error in result.errors:
                 lines.append(f"  error: {_escape_control_chars(error)}")
@@ -132,8 +142,9 @@ def render_text(results: list[CheckResult], context: dict[str, object]) -> str:
         for finding in result.findings:
             subject = _escape_control_chars(finding.subject)
             lines.append(
-                f"  - [{finding.status}] {subject} "
-                f"(severity={finding.severity}, confidence={finding.confidence})"
+                f"  - [{_escape_control_chars(finding.status)}] {subject} "
+                f"(severity={_escape_control_chars(finding.severity)}, "
+                f"confidence={_escape_control_chars(finding.confidence)})"
             )
             lines.append(f"      action: {_escape_control_chars(finding.action)}")
             for evidence in finding.evidence:

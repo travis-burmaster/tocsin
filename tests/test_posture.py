@@ -128,6 +128,17 @@ def _missing_runner(argv, *, timeout, max_bytes, extra_env=None):
     return CommandResult(None, '', '', 'missing')
 
 
+def _ok_runner(argv, *, timeout, max_bytes, extra_env=None):
+    """Every setting command succeeds and reports 'enabled'.
+
+    Launch-directory tests that assert on completion use this rather than
+    `_missing_runner`, so the settings half of the check contributes no
+    failure of its own (any runner failure, 'missing' included, makes the
+    check partial -- see docs/evidence/posture-contract.md).
+    """
+    return _runner_from(_ENABLED_OUTPUT)(argv, timeout=timeout, max_bytes=max_bytes, extra_env=extra_env)
+
+
 def test_scan_posture_real_captured_outputs(tmp_path):
     # gatekeeper/sip/filevault enabled; firewall and stealth disabled --
     # exactly the mixed real-world snapshot from posture-research.md.
@@ -157,15 +168,19 @@ def test_scan_posture_all_settings_enabled_is_clean(tmp_path):
     assert exit_code([result]) == 0
 
 
-def test_scan_posture_all_missing_is_unknown_complete_with_coverage_gap():
+def test_scan_posture_all_missing_is_unknown_partial_with_coverage_gap():
+    # Five settings that could not be read is a check that did not cover
+    # its requested scope: any runner failure, 'missing' included, is
+    # partial (see docs/evidence/posture-contract.md).
     result = scan_posture(runner=_missing_runner, launch_dirs=[])
 
     posture_findings = [f for f in result.findings if f.category == 'posture']
     assert len(posture_findings) == 5
     assert all(f.status == 'unassessed' for f in posture_findings)
-    assert result.completion == 'complete'
+    assert result.completion == 'partial'
     assert result.metadata['coverage'] == {'assessed': 0, 'unassessed': 5}
-    assert exit_code([result]) == 0  # unassessed is a coverage gap, not actionable
+    assert len(result.errors) == 5
+    assert exit_code([result]) == 2
 
 
 def test_observed_at_is_shared_across_all_setting_findings():
@@ -224,9 +239,9 @@ def test_scan_posture_timeout_is_partial():
     assert by_subject['sip'].status == 'unassessed'
 
 
-def test_scan_posture_missing_executable_alone_stays_complete():
-    # 'missing' (executable simply absent) never makes the check partial
-    # on its own -- only other runner failures do.
+def test_scan_posture_missing_executable_is_partial():
+    # A single absent executable still leaves one of the five settings
+    # unread, so the check did not cover its whole scope.
     def fake(argv, *, timeout, max_bytes, extra_env=None):
         if argv == _ARGV['filevault']:
             return CommandResult(None, '', '', 'missing')
@@ -234,7 +249,9 @@ def test_scan_posture_missing_executable_alone_stays_complete():
 
     result = scan_posture(runner=fake, launch_dirs=[])
 
-    assert result.completion == 'complete'
+    assert result.completion == 'partial'
+    assert exit_code([result]) == 2
+    assert any('filevault' in e and 'missing' in e for e in result.errors)
 
 
 def test_scan_posture_evidence_includes_command_rc_and_output():
@@ -269,7 +286,7 @@ def _startup_findings(result):
 def test_missing_launch_dir_has_status_missing_no_error(tmp_path):
     missing_dir = tmp_path / 'does-not-exist'
 
-    result = scan_posture(runner=_missing_runner, launch_dirs=[missing_dir])
+    result = scan_posture(runner=_ok_runner, launch_dirs=[missing_dir])
 
     assert result.metadata['launch_dirs'][str(missing_dir)]['status'] == 'missing'
     assert result.errors == ()
@@ -285,7 +302,7 @@ def test_denied_launch_dir_is_error_string_and_partial(tmp_path):
     denied_dir.mkdir()
     denied_dir.chmod(0)
     try:
-        result = scan_posture(runner=_missing_runner, launch_dirs=[denied_dir])
+        result = scan_posture(runner=_ok_runner, launch_dirs=[denied_dir])
     finally:
         denied_dir.chmod(0o700)
 
@@ -307,7 +324,7 @@ def test_launch_dir_with_unsearchable_parent_is_denied_and_partial(tmp_path):
     child = parent / 'LaunchAgents'
     parent.chmod(0)
     try:
-        result = scan_posture(runner=_missing_runner, launch_dirs=[child])
+        result = scan_posture(runner=_ok_runner, launch_dirs=[child])
     finally:
         parent.chmod(0o700)
 
@@ -323,7 +340,7 @@ def test_launch_dir_path_that_is_a_file_is_unreadable_and_partial(tmp_path):
     file_path = tmp_path / 'LaunchAgents'
     file_path.write_text('not a directory')
 
-    result = scan_posture(runner=_missing_runner, launch_dirs=[file_path])
+    result = scan_posture(runner=_ok_runner, launch_dirs=[file_path])
 
     assert result.metadata['launch_dirs'][str(file_path)]['status'] == 'unreadable'
     assert result.completion == 'partial'
@@ -365,7 +382,7 @@ def test_xml_plist_missing_absolute_executable_needs_review(tmp_path):
             fmt=plistlib.FMT_XML,
         )
 
-    result = scan_posture(runner=_missing_runner, launch_dirs=[tmp_path])
+    result = scan_posture(runner=_ok_runner, launch_dirs=[tmp_path])
 
     (finding,) = _startup_findings(result)
     assert finding.status == 'needs-review'

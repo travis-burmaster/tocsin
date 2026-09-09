@@ -139,10 +139,10 @@ def parse_setting(name: str, returncode: int, output: str) -> str:
 def _setting_finding(name: str, argv: list[str], result, observed_at: str) -> tuple[Finding, str, bool]:
     """Build the Finding for one posture setting.
 
-    Returns (finding, state, made_partial). `made_partial` is True only
-    for a runner failure other than 'missing' (a coverage gap on its own
-    does not make the check partial; a runner failure other than a simply
-    absent executable does).
+    Returns (finding, state, made_partial). ANY runner failure --
+    'missing' included -- makes the check partial: a setting that could
+    not be read is scope the check did not cover, whatever the reason the
+    command did not run. See docs/evidence/posture-contract.md.
     """
     rc = result.returncode
     raw_first_line = _escape_control_chars(_first_nonempty_line(result.stdout))
@@ -151,17 +151,15 @@ def _setting_finding(name: str, argv: list[str], result, observed_at: str) -> tu
     made_partial = False
     if result.failure is not None:
         state = 'unknown'
+        made_partial = True
         if result.failure == 'missing':
             reason = 'executable not found'
         elif result.failure == 'permission':
             reason = 'permission denied'
-            made_partial = True
         elif result.failure == 'timeout':
             reason = 'command timed out'
-            made_partial = True
         else:
             reason = f'command did not complete: {result.failure}'
-            made_partial = True
         evidence.append(f'reason: {reason}')
     else:
         state = parse_setting(name, rc, result.stdout)
@@ -440,11 +438,11 @@ def scan_posture(*, runner: Runner = run_command, launch_dirs: list[Path] | None
         }
         if state == 'unknown':
             unknown_settings += 1
-            # A simply absent executable ('missing') is an expected,
-            # non-partial coverage gap, not an operational error; only a
-            # failure that actually stopped the check running (permission,
-            # timeout, ...) is worth surfacing in `errors`.
-            if result.failure is not None and result.failure != 'missing':
+            # Every runner failure is surfaced in `errors`, 'missing'
+            # included: an absent executable is the reason this setting
+            # was never read, and a reader of the report needs to see it
+            # alongside the 'partial' completion it now produces.
+            if result.failure is not None:
                 errors.append(f"{name} check ({' '.join(argv)}) did not complete: {result.failure}")
         else:
             assessed_settings += 1

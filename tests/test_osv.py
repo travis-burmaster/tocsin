@@ -715,6 +715,48 @@ def test_scan_rc127_with_nonempty_results_is_partial_defensive(monkeypatch, tmp_
     assert any(f.status == 'error' for f in result.findings)
 
 
+def test_scan_rc128_with_extraction_failure_is_partial_with_error_finding(monkeypatch, tmp_path):
+    """rc 128 means 'no manifests parsed' -- but stderr may say why.
+
+    A manifest that failed to extract is the reason there is nothing to
+    report; reporting only the unassessed 'no manifests' finding here
+    would present a broken manifest as an empty project.
+    """
+    _fake_which(monkeypatch)
+    stderr = STDERR_EXTRACTION_ERROR + '\nNo package sources found, --help for usage information.\n'
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(128, '', stderr, None)
+
+    result = scan_project(tmp_path, online=True, database=None, runner=_runner(scan=scan))
+
+    assert result.completion == 'partial'
+    errored = [f for f in result.findings if f.status == 'error']
+    assert len(errored) == 1
+    assert 'package-lock.json' in errored[0].subject
+    assert any(f.status == 'unassessed' for f in result.findings)
+    assert any('extraction' in e.lower() for e in result.errors)
+    assert exit_code([result]) == 2
+
+
+def test_scan_rc0_zero_manifests_with_extraction_failure_keeps_error_finding(monkeypatch, tmp_path):
+    """The 'no manifests' finding is added to, never substituted for, the
+    error findings that explain why nothing parsed."""
+    _fake_which(monkeypatch)
+
+    def scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, EMPTY_JSON, STDERR_EXTRACTION_ERROR, None)
+
+    result = scan_project(tmp_path, online=True, database=None, runner=_runner(scan=scan))
+
+    assert result.completion == 'partial'
+    errored = [f for f in result.findings if f.status == 'error']
+    assert len(errored) == 1
+    assert 'package-lock.json' in errored[0].subject
+    assert any(f.status == 'unassessed' for f in result.findings)
+    assert exit_code([result]) == 2
+
+
 # --- online mode must never leak a database into metadata (item 6) ---------
 
 def test_online_mode_ignores_any_supplied_database_in_metadata(monkeypatch, tmp_path):
