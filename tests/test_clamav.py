@@ -360,6 +360,94 @@ def test_rc2_with_one_found_is_partial_keeping_finding(monkeypatch, tmp_path):
     assert result.findings[0].status == 'detected'
 
 
+def test_rc2_no_found_retains_enumeration_skip_and_error(monkeypatch, tmp_path):
+    """rc 2 with no parsed FOUND lines is still 'error' with zero PARSED
+    alert findings (the brief's named case), but enumeration-time
+    findings/errors (here: an ambiguous filename) are not discarded --
+    "exit 2: partial or failed, retaining any findings" applies to those."""
+    _fake_which(monkeypatch)
+    (tmp_path / 'a.txt').write_text('hi')
+    bad = tmp_path / 'bad\nname.txt'
+    bad.write_bytes(b'x')
+
+    def _scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(2, '', 'database unavailable', None)
+
+    result = scan_files(tmp_path, runner=_runner(scan=_scan))
+
+    assert result.completion == 'error'
+    assert len(result.findings) == 1
+    assert result.findings[0].status == 'skipped'
+    assert any('database unavailable' in e for e in result.errors)
+    assert any('ambiguous' in e for e in result.errors)
+
+
+# --- non-UTF-8 filenames ---------------------------------------------------------
+
+def test_ambiguity_reason_flags_non_utf8_filename():
+    surrogate_path = '/tmp/x/bad\udcffname.txt'
+    reason = clamav_module._ambiguity_reason(surrogate_path)
+    assert reason is not None
+    assert 'UTF-8' in reason
+
+
+def test_non_utf8_filename_on_disk_is_skipped_and_partial(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+    bad_bytes = os.fsencode(str(tmp_path)) + b'/bad-\xff-name.txt'
+    try:
+        with open(bad_bytes, 'wb') as fh:
+            fh.write(b'hi')
+    except OSError:
+        pytest.skip('filesystem rejects non-UTF-8 filenames')
+
+    def _scan(argv, *, timeout, max_bytes, extra_env=None):
+        return CommandResult(0, '----------- SCAN SUMMARY -----------\nScanned files: 0\n', '', None)
+
+    result = scan_files(tmp_path, runner=_runner(scan=_scan))
+
+    assert result.completion == 'partial'
+    skipped = [f for f in result.findings if f.status == 'skipped']
+    assert len(skipped) == 1
+    assert 'UTF-8' in ' '.join(skipped[0].evidence)
+
+
+def test_argv_pins_safety_critical_flags_and_forbidden_absent(monkeypatch, tmp_path):
+    _fake_which(monkeypatch)
+    (tmp_path / 'a.txt').write_text('hi')
+    captured = {}
+
+    def _scan(argv, *, timeout, max_bytes, extra_env=None):
+        captured['argv'] = list(argv)
+        return CommandResult(0, '----------- SCAN SUMMARY -----------\nScanned files: 1\n', '', None)
+
+    result = scan_files(tmp_path, runner=_runner(scan=_scan))
+
+    argv = captured['argv']
+    required_flags = (
+        '--stdout', '--infected', '--alert-exceeds-max=yes', '--alert-encrypted=yes',
+        '--max-filesize=100M', '--max-scansize=500M', '--max-recursion=20',
+        '--follow-dir-symlinks=0', '--follow-file-symlinks=0',
+    )
+    for flag in required_flags:
+        assert flag in argv, f'missing required flag: {flag}'
+
+    file_list_args = [a for a in argv if a.startswith('--file-list=')]
+    assert len(file_list_args) == 1
+
+    for arg in argv[1:]:
+        assert arg.startswith('-'), f'unexpected positional argument in argv: {arg}'
+
+    forbidden = ('--remove', '--move', '--copy', '--recursive', '--database')
+    for arg in argv:
+        for flag in forbidden:
+            assert flag not in arg, f'forbidden flag {flag} found in argv element {arg}'
+
+    command_meta = result.metadata['command']
+    assert '<file-list>' in command_meta
+    assert not any('tocsin-clamav-' in str(c) for c in command_meta)
+    assert not any(str(tmp_path) in str(c) and c != '<file-list>' for c in command_meta)
+
+
 # --- runner failures -----------------------------------------------------------
 
 def test_timeout_keeps_complete_lines_drops_trailing_partial(monkeypatch, tmp_path):
@@ -411,7 +499,30 @@ def test_permission_failure_is_error(monkeypatch, tmp_path):
     assert result.completion == 'error'
 
 
+def test_stdout_cant_open_file_is_error_and_partial(monkeypatch, tmp_path):
+    # --stdout redirects clamscan's per-file diagnostics to stdout, not
+    # stderr (the adapter's own --help fixture: "Write to stdout instead
+    # of stderr"; clamav-research.md line 15). This is the realistic
+    # production shape.
+    _fake_which(monkeypatch)
+    (tmp_path / 'a.txt').write_text('x')
+
+    def _scan(argv, *, timeout, max_bytes, extra_env=None):
+        stdout = (
+            "/some/path: Can't open file or directory\n"
+            '----------- SCAN SUMMARY -----------\nScanned files: 1\nInfected files: 0\n'
+        )
+        return CommandResult(0, stdout, '', None)
+
+    result = scan_files(tmp_path, runner=_runner(scan=_scan))
+
+    assert result.completion == 'partial'
+    assert any("Can't open file" in e for e in result.errors)
+
+
 def test_stderr_cant_open_file_is_error_and_partial(monkeypatch, tmp_path):
+    # Defensive coverage in case a build or wrapper still emits
+    # diagnostics on stderr instead of (or as well as) stdout.
     _fake_which(monkeypatch)
     (tmp_path / 'a.txt').write_text('x')
 
@@ -424,6 +535,26 @@ def test_stderr_cant_open_file_is_error_and_partial(monkeypatch, tmp_path):
 
     assert result.completion == 'partial'
     assert any("Can't open file" in e for e in result.errors)
+
+
+def test_parse_stdout_diagnostic_line_naming_requested_path_is_error():
+    # Not one of the four known trigger substrings, but names a requested
+    # path in the "<path>: <message>" shape clamscan's per-file
+    # diagnostics take -- must still be captured as an error.
+    requested = [Path('/tmp/thing.txt')]
+    parsed = parse_clamscan_output('/tmp/thing.txt: Empty file\n', '', requested)
+    assert any('/tmp/thing.txt' in e for e in parsed.errors)
+    assert parsed.detections == () and parsed.heuristics == () and parsed.skipped == ()
+
+
+def test_parse_stdout_summary_lines_are_not_treated_as_errors():
+    stdout = (
+        '----------- SCAN SUMMARY -----------\n'
+        'Known viruses: 123\n'
+        'Scanned files: 1\n'
+    )
+    parsed = parse_clamscan_output(stdout, '', [])
+    assert parsed.errors == ()
 
 
 # --- summary parsing -----------------------------------------------------------

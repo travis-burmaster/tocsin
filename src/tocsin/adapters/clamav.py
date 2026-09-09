@@ -15,7 +15,9 @@ Tocsin enumerates files itself (`os.walk(..., followlinks=False)`, never
 never receives a positional path argument. This also lets Tocsin exclude
 filenames that would be ambiguous in clamscan's plain-text output (a
 control character, or the literal ": " sequence, which is how clamscan
-itself separates a path from its verdict).
+itself separates a path from its verdict) or that are not valid UTF-8 (so
+they cannot be written into the file-list at all) -- see
+`_ambiguity_reason`.
 
 No engine was available on the development host to pin a tested version
 against, so this uses feature detection instead: `clamscan --help` output
@@ -102,7 +104,7 @@ _SUMMARY_KEY_MAP = {
     'Time': 'time',
 }
 
-_STDERR_ERROR_TRIGGERS = ("Can't open file", 'Access denied', 'LibClamAV Error', 'ERROR:')
+_ERROR_TRIGGERS = ("Can't open file", 'Access denied', 'LibClamAV Error', 'ERROR:')
 _MAX_ERROR_LINES = 50
 _MAX_ERROR_LINE_LEN = 500
 
@@ -113,22 +115,47 @@ def _now_iso() -> str:
 
 def _escape_control_chars(value: str) -> str:
     """Escape control characters (and DEL) as literal \\xHH so a hostile
-    filename cannot alter the terminal or report output."""
+    filename cannot alter the terminal or report output. Also escapes a
+    lone surrogate code point (0xdc80-0xdcff) the way `os.fsdecode`'s
+    'surrogateescape' error handler represents a non-UTF-8 byte from a
+    filename, recovering the original byte value, so a non-UTF-8 filename
+    can still be named safely in a report string."""
     out = []
     for ch in value:
         code_point = ord(ch)
         if code_point < 0x20 or code_point == 0x7f:
             out.append(f'\\x{code_point:02x}')
+        elif 0xdc80 <= code_point <= 0xdcff:
+            out.append(f'\\x{code_point - 0xdc00:02x}')
         else:
             out.append(ch)
     return ''.join(out)
 
 
-def _is_ambiguous(path_str: str) -> bool:
-    """A path is ambiguous in clamscan's plain-text output if it contains a
-    control character or the literal ": " sequence clamscan itself uses to
-    separate a path from its verdict."""
-    return bool(_CONTROL_CHAR_RE.search(path_str)) or ': ' in path_str
+def _ambiguity_reason(path_str: str) -> str | None:
+    """Why `path_str` cannot be safely submitted to clamscan's `--file-list`,
+    or None if it can.
+
+    Three reasons, in the order checked: a control character (including a
+    literal newline) or the literal ": " sequence make a
+    "<path>: <verdict>" alert line unsplittable/ambiguous; a filename that
+    is not valid UTF-8 (surfaced by Python as a string containing a lone
+    surrogate, via `os.fsdecode`'s 'surrogateescape' handler) cannot be
+    written into the (UTF-8) file-list at all. Tocsin chooses to skip
+    such files rather than attempt a lossy surrogateescape round-trip
+    through clamscan's own text output, whose encoding behavior for
+    non-UTF-8 paths is unverified (no engine was available to check
+    against) -- see docs/evidence/clamav-contract.md.
+    """
+    if _CONTROL_CHAR_RE.search(path_str):
+        return 'filename contains a control character, ambiguous in clamscan text output'
+    if ': ' in path_str:
+        return 'filename contains the ": " sequence, ambiguous in clamscan text output'
+    try:
+        path_str.encode('utf-8')
+    except UnicodeEncodeError:
+        return 'filename is not valid UTF-8'
+    return None
 
 
 # --- ParsedScan: the small, runner-free parsing seam ------------------------
@@ -211,6 +238,19 @@ def _classify_alert(path_str: str, name: str, observed_at: str) -> tuple[str, Fi
     )
 
 
+def _is_summary_line(line: str) -> bool:
+    """Whether `line` is part of the trailing SCAN SUMMARY block (its
+    banner, or one of the recognized 'Key: value' summary lines) rather
+    than a per-file alert or diagnostic."""
+    stripped = line.strip()
+    if not stripped:
+        return False
+    if stripped.startswith('---'):
+        return True
+    key = stripped.split(':', 1)[0].strip()
+    return key in _SUMMARY_KEY_MAP
+
+
 def parse_clamscan_output(stdout: str, stderr: str, requested: list[Path]) -> ParsedScan:
     """Parse `clamscan --stdout --infected` output into a ParsedScan.
 
@@ -223,11 +263,21 @@ def parse_clamscan_output(stdout: str, stderr: str, requested: list[Path]) -> Pa
     FOUND line naming a path outside `requested` indicates parse
     ambiguity and is ignored (recorded as an error) rather than trusted.
 
-    stderr lines matching a known clamscan error trigger ("Can't open
-    file", "Access denied", "LibClamAV Error", "ERROR:") are recorded as
-    plain error strings, bounded to 50 lines of at most 500 characters
-    each -- clamscan does not emit per-file Finding-worthy structure for
-    these, just diagnostic text.
+    `--stdout` redirects clamscan's per-file diagnostics ("Can't open
+    file", "Access denied", ...) to stdout alongside the alert lines and
+    summary block (clamav-research.md, and this adapter's own --help
+    fixture: "Write to stdout instead of stderr"), so every non-FOUND,
+    non-blank, non-summary-block stdout line is treated as a diagnostic:
+    if it names one of the requested paths (clamscan's per-file
+    diagnostics take the shape "<path>: <message>") it becomes an error
+    for that path; a line matching a known trigger substring ("Can't open
+    file", "Access denied", "LibClamAV Error", "ERROR:") is recorded even
+    without a recognizable leading path. stderr is scanned the same way
+    for the same trigger substrings, in case a build or wrapper still
+    sends diagnostics there. All such lines are recorded as plain error
+    strings, bounded to 50 lines of at most 500 characters each --
+    clamscan does not emit per-file Finding-worthy structure for these,
+    just diagnostic text.
     """
     observed_at = _now_iso()
     requested_set = {str(p) for p in requested}
@@ -238,27 +288,37 @@ def parse_clamscan_output(stdout: str, stderr: str, requested: list[Path]) -> Pa
     errors: list[str] = []
 
     for line in stdout.splitlines():
-        if not line.endswith(' FOUND'):
+        if not line.strip():
             continue
-        without_found = line[: -len(' FOUND')]
-        try:
-            path_str, name = without_found.rsplit(': ', 1)
-        except ValueError:
-            errors.append(f'unparseable clamscan alert line: {line[:_MAX_ERROR_LINE_LEN]}')
+        if line.endswith(' FOUND'):
+            without_found = line[: -len(' FOUND')]
+            try:
+                path_str, name = without_found.rsplit(': ', 1)
+            except ValueError:
+                errors.append(f'unparseable clamscan alert line: {line[:_MAX_ERROR_LINE_LEN]}')
+                continue
+            if path_str not in requested_set:
+                errors.append(f'FOUND line named an unrequested path (ignored): {line[:_MAX_ERROR_LINE_LEN]}')
+                continue
+            bucket, finding = _classify_alert(path_str, name, observed_at)
+            if bucket == 'detections':
+                detections.append(finding)
+            elif bucket == 'heuristics':
+                heuristics.append(finding)
+            else:
+                skipped.append(finding)
             continue
-        if path_str not in requested_set:
-            errors.append(f'FOUND line named an unrequested path (ignored): {line[:_MAX_ERROR_LINE_LEN]}')
+        if _is_summary_line(line):
             continue
-        bucket, finding = _classify_alert(path_str, name, observed_at)
-        if bucket == 'detections':
-            detections.append(finding)
-        elif bucket == 'heuristics':
-            heuristics.append(finding)
-        else:
-            skipped.append(finding)
+        # A non-FOUND, non-summary, non-blank stdout line: with --stdout,
+        # clamscan's own per-file diagnostics print here instead of on
+        # stderr (see docstring above).
+        candidate_path = line.split(': ', 1)[0] if ': ' in line else None
+        if candidate_path in requested_set or any(trigger in line for trigger in _ERROR_TRIGGERS):
+            errors.append(line.strip()[:_MAX_ERROR_LINE_LEN])
 
     for line in stderr.splitlines():
-        if any(trigger in line for trigger in _STDERR_ERROR_TRIGGERS):
+        if any(trigger in line for trigger in _ERROR_TRIGGERS):
             errors.append(line.strip()[:_MAX_ERROR_LINE_LEN])
 
     summary = _parse_summary(stdout)
@@ -413,14 +473,15 @@ def _handle_regular_file(file_path: Path, enum: _Enumeration, *, max_files: int,
     enum.files_requested += 1
 
     path_str = str(file_path)
-    if _is_ambiguous(path_str):
+    reason = _ambiguity_reason(path_str)
+    if reason is not None:
         enum.ambiguous_findings.append(Finding(
             category='file',
             subject=_escape_control_chars(path_str),
             status='skipped',
             severity='unknown',
             confidence='high',
-            evidence=('filename contains a control character or the ": " sequence, ambiguous in clamscan text output',),
+            evidence=(reason,),
             action='rename the file to remove ambiguous characters and rescan',
             observed_at=observed_at,
         ))
@@ -529,6 +590,13 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
     findings: list[Finding] = list(enumeration.ambiguous_findings) + list(enumeration.other_findings)
     errors: list[str] = []
     needs_partial = bool(enumeration.ambiguous_findings) or bool(enumeration.other_findings)
+    if enumeration.ambiguous_findings:
+        errors.append(
+            f'{len(enumeration.ambiguous_findings)} file(s) skipped: ambiguous filename '
+            '(control character, the ": " sequence, or not valid UTF-8)'
+        )
+    if enumeration.other_findings:
+        errors.append(f'{len(enumeration.other_findings)} file(s) skipped: could not be read for scanning')
     if enumeration.cap_exceeded:
         needs_partial = True
         errors.append(f'enumeration cap of {_MAX_FILES} files reached; stopped enumerating additional files')
@@ -553,8 +621,13 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
 
     fd, tmp_path_str = tempfile.mkstemp(prefix='tocsin-clamav-', suffix='.list')
     try:
-        os.chmod(tmp_path_str, 0o600)
+        # fdopen first, so `handle` owns `fd` from this point on: if
+        # os.fchmod raises, the `with` block's __exit__ still closes the
+        # underlying fd (no leak). Every path in `enumeration.accepted`
+        # already passed the strict-UTF-8 check in `_ambiguity_reason`,
+        # so this write can never raise UnicodeEncodeError.
         with os.fdopen(fd, 'w', encoding='utf-8') as handle:
+            os.fchmod(handle.fileno(), 0o600)
             for accepted_path in enumeration.accepted:
                 handle.write(f'{accepted_path}\n')
 
@@ -564,9 +637,9 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
             '--infected',
             '--alert-exceeds-max=yes',
             '--alert-encrypted=yes',
-            '--max-filesize=100M',
-            '--max-scansize=500M',
-            '--max-recursion=20',
+            f"--max-filesize={_LIMITS['max_filesize']}",
+            f"--max-scansize={_LIMITS['max_scansize']}",
+            f"--max-recursion={_LIMITS['max_recursion']}",
             '--follow-dir-symlinks=0',
             '--follow-file-symlinks=0',
             f'--file-list={tmp_path_str}',
@@ -602,7 +675,7 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
 
     if result.failure is not None:
         errors.append(f'clamscan did not complete: {result.failure}')
-        return CheckResult(name=_NAME, completion='error', findings=(), errors=tuple(errors), metadata=metadata)
+        return CheckResult(name=_NAME, completion='error', findings=tuple(findings), errors=tuple(errors), metadata=metadata)
 
     rc = result.returncode
     parsed = parse_clamscan_output(result.stdout, result.stderr, enumeration.accepted)
@@ -614,11 +687,16 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
     if rc == 2 and not has_found_lines:
         # "some error(s) occurred" and nothing was parsed at all (e.g. a
         # missing signature database): never invent a clean/no-match
-        # finding here -- report a plain failure with zero findings.
+        # finding here -- report a plain failure with zero PARSED alert
+        # findings. Enumeration-time findings/errors (ambiguous names,
+        # stat failures, the enumeration cap) are still retained: "exit
+        # 2: partial or failed, retaining any findings" applies to those
+        # even though the scan attempt itself produced nothing usable.
         detail = result.stderr.strip() or '(no stderr)'
+        combined_errors = tuple(errors) + tuple(parsed.errors) + (f'clamscan exited 2: {detail}',)
         return CheckResult(
-            name=_NAME, completion='error', findings=(),
-            errors=(f'clamscan exited 2: {detail}',), metadata=metadata,
+            name=_NAME, completion='error', findings=tuple(findings),
+            errors=combined_errors, metadata=metadata,
         )
 
     if rc == 2:
@@ -628,9 +706,10 @@ def scan_files(path: Path, *, runner: Runner = run_command) -> CheckResult:
         completion = 'partial' if (needs_partial or parsed.skipped or parsed.errors) else 'complete'
     else:
         detail = result.stderr.strip() or '(no stderr)'
+        combined_errors = tuple(errors) + tuple(parsed.errors) + (f'clamscan exited {rc}: {detail}',)
         return CheckResult(
-            name=_NAME, completion='error', findings=(),
-            errors=(f'clamscan exited {rc}: {detail}',), metadata=metadata,
+            name=_NAME, completion='error', findings=tuple(findings),
+            errors=combined_errors, metadata=metadata,
         )
 
     findings += list(parsed.detections) + list(parsed.heuristics) + list(parsed.skipped)

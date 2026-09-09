@@ -104,12 +104,29 @@ directory with `--recursive`:
   path/verdict separator). Such a file gets a `skipped` Finding (subject:
   the path with control characters escaped as `\xHH`; action: rename and
   rescan) and the whole check becomes `partial`.
+- A candidate file whose absolute path is not valid UTF-8 (surfaced by
+  Python as a string containing a lone surrogate, via `os.fsdecode`'s
+  `'surrogateescape'` error handler for a non-UTF-8 byte -- e.g. a
+  filename that arrived over SMB/NFS from a filesystem with a different
+  encoding) is **also not scanned**, for the same reason: it cannot be
+  written into the (UTF-8) file-list at all. Tocsin chose to skip such
+  files rather than attempt a lossy surrogateescape round-trip through
+  clamscan's own text output, because that output's encoding behavior
+  for non-UTF-8 paths could not be verified against a real engine in this
+  environment. This is checked by the same `_ambiguity_reason` helper and
+  produces the same kind of `skipped` Finding (evidence: `'filename is
+  not valid UTF-8'`).
 - A file that vanishes or becomes unreadable during the enumeration
   `stat()` call also gets a `skipped` Finding and `partial`.
 - The remaining accepted absolute paths are written one per line to a
-  temp file created via `tempfile.mkstemp()` and explicitly `chmod`ed to
-  `0600`, passed as `--file-list=<path>`, and removed in a `finally`
-  block regardless of how the scan call completes.
+  temp file created via `tempfile.mkstemp()`. The file descriptor is
+  wrapped with `os.fdopen()` *before* `os.fchmod(handle.fileno(), 0o600)`
+  is called on it (not `os.chmod()` on the path beforehand): if `fchmod`
+  raises, the `with` block still closes the fd, so nothing leaks. The
+  path is passed as `--file-list=<path>` and removed in a `finally` block
+  regardless of how the scan call completes. Because every path in the
+  file list already passed the UTF-8 check above, this write is always
+  plain strict-UTF-8 and can never raise `UnicodeEncodeError`.
 
 This design means clamscan never receives a positional path argument at
 all -- every `argv` element after the binary path is a flag -- and never
@@ -159,11 +176,24 @@ summary block (no per-file `OK` lines).
   `Time:` into metadata `summary`, with `None` for any key not present in
   the output. `files_scanned` in top-level metadata is `int(Scanned
   files)` when parseable, else `None`.
-- stderr lines containing `Can't open file`, `Access denied`,
-  `LibClamAV Error`, or `ERROR:` are recorded as plain strings in
+- **Per-file diagnostics print on stdout, not stderr.** `--stdout`
+  redirects everything clamscan would otherwise write to stderr -- the
+  `--help` text says so explicitly ("Write to stdout instead of stderr")
+  and clamav-research.md's output-format notes list `Can't open file` /
+  `Access denied` alongside the per-file `OK`/`FOUND` lines. So every
+  non-`FOUND`, non-blank, non-summary-block line on stdout is treated as
+  a diagnostic: if it names one of the requested paths (clamscan's
+  per-file diagnostics take the shape `<path>: <message>`, e.g. `<path>:
+  Can't open file`, `<path>: Empty file`) it becomes an error for that
+  path even if the message text doesn't match one of the trigger
+  substrings below; a line matching a known trigger (`Can't open file`,
+  `Access denied`, `LibClamAV Error`, `ERROR:`) is recorded even without
+  a recognizable leading path. stderr is scanned the same way for the
+  same trigger substrings, in case a build or wrapper still emits
+  diagnostics there. All such lines are recorded as plain strings in
   `errors` (bounded to 50 lines of at most 500 characters each) and force
-  `partial` -- clamscan emits these as diagnostic text, not per-file
-  structured alerts, so there is nothing to turn into a Finding.
+  `partial` -- clamscan does not emit structured per-file objects for
+  these, just diagnostic text.
 
 ## Limits (verified against the man page; see clamav-research.md)
 
@@ -205,16 +235,28 @@ Once a real exit code exists:
   invariant only forces non-`complete` for `error`/`skipped` findings).
 - `rc == 2` **and no `FOUND` line was parsed at all** (e.g. clamscan's own
   named example, `CommandResult(2, '', 'database unavailable', None)`):
-  `error`, with **zero findings** -- this is the one case where Tocsin
-  never invents a clean or `no-known-match`-flavored result out of a
-  failed run. `no-known-match` is never emitted by this adapter under any
-  circumstances.
+  `error`, with **zero PARSED alert findings** -- this is the one case
+  where Tocsin never invents a clean or `no-known-match`-flavored result
+  out of a failed run. `no-known-match` is never emitted by this adapter
+  under any circumstances. Enumeration-time findings (ambiguous/non-UTF-8
+  names, stat failures) and errors (including the enumeration-cap
+  message) are **not** discarded here, even though the scan attempt
+  itself produced nothing usable: the global exit-code policy states
+  "exit 2: partial or failed, retaining any findings," and that applies
+  to what enumeration already established regardless of how the
+  subsequent scan attempt went.
 - `rc == 2` **with at least one parsed `FOUND` line**: the parsed alerts
   are kept, and completion is `partial` (something clearly went wrong
   during the run, but whatever clamscan did manage to report is still
   surfaced rather than discarded).
 - Any other `rc`: `error`, with the raw stderr detail (or a placeholder)
-  in `errors`.
+  in `errors`, alongside the same retained enumeration findings/errors.
+- A runner failure of an unrecognized kind (i.e. anything other than
+  `missing`/`timeout`/`output-limit`/`cancelled`/`permission`, none of
+  which is expected in practice) is also `error` while still retaining
+  enumeration findings/errors -- no branch of `scan_files` discards
+  enumeration-time evidence just because the scan call itself failed or
+  produced nothing.
 
 ## Feature detection instead of a version pin
 
