@@ -75,15 +75,26 @@ invokes an engine you have already installed and kept current yourself.
 
 ```
 brew install clamav
+sed 's/^Example/#Example/' /opt/homebrew/etc/clamav/freshclam.conf.sample > /opt/homebrew/etc/clamav/freshclam.conf
 freshclam          # downloads/updates the virus signature database
 ```
+
+The Homebrew bottle ships `freshclam.conf.sample` rather than a usable
+`freshclam.conf` -- the sample's placeholder `Example` line must be
+commented out (as above) before `freshclam` will run at all. `freshclam`
+then downloads about 120 MB of signature data on first run. On at least
+one verified run, `freshclam` printed `ERROR: NULL X509 store` twice per
+database (main, daily) while still reporting `Database test passed` for
+each and writing the `.cvd.sign` files -- a known Homebrew 1.5 quirk; the
+databases were usable despite the error text (see
+`docs/evidence/clamav-contract.md`).
 
 `freshclam` must be run manually, and re-run periodically to keep
 signatures current -- Tocsin never invokes it. No clamscan binary or
 signature database is shipped with, or fetched by, this project; see
 `docs/evidence/clamav-contract.md` for exactly which behavior has been
-verified against a real binary (currently: none -- see
-`docs/evidence/validation.md`).
+verified against a real binary (ClamAV 1.5.4, live-verified 2026-09-10 --
+see `docs/evidence/validation.md`).
 
 ### OSV-Scanner (`osv-scanner`), for `--project`
 

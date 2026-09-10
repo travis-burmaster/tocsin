@@ -59,22 +59,33 @@ every "tested"/"untested" claim below, and each adapter's
 
 ## File scanning (`--files`)
 
-- Engine: ClamAV (`clamscan`). **No live engine has ever been tested** --
-  no clamscan binary was available on any development host, and a Docker
-  probe attempted during Task 6 was killed by the host for low memory
-  before it could run (see `docs/evidence/validation.md`). The EICAR test
-  string was never run against a real engine.
+- Engine: ClamAV (`clamscan`). **Verified live** against ClamAV 1.5.4
+  (Homebrew bottle) on macOS 26.6.2 arm64, 2026-09-10: EICAR was detected
+  end to end, a password-protected zip was reported `skipped` (evidence
+  `Heuristics.Encrypted.Zip`), and the `Heuristics.Limits.Exceeded.*`
+  oversized-file alert string was confirmed by a direct probe (see
+  `docs/evidence/clamav-contract.md`, `docs/evidence/validation.md`).
+  This is one engine version on one host, not a matrix -- a different
+  clamscan version, a Linux/Windows build, or a different signature
+  database has not been checked.
 - Every flag, return code, and output format this adapter implements
   (`--stdout`, `--infected`, `--alert-exceeds-max`, `--alert-encrypted`,
   the `<path>: <name> FOUND` line shape, return codes 0/1/2) is sourced
   from the `clamscan(1)` man page and cross-referenced against the
-  ClamAV source, recorded in full in `docs/evidence/clamav-contract.md`
-  -- not confirmed against an observed real run.
-- `tests/test_clamav.py::test_real_clamscan_detects_eicar` is an
-  optional, environment-gated (`TOCSIN_CLAMSCAN`) integration test that
-  writes the standard EICAR string into a pytest tmp directory and scans
-  it; it has never been run in this project because no engine was
-  available, and it is never run in CI.
+  ClamAV source, recorded in full in `docs/evidence/clamav-contract.md`,
+  and the flags/return-code precedence/output-routing behavior above have
+  now been confirmed against the real 1.5.4 binary rather than the man
+  page alone. The live probes also surfaced a real reporting gap now
+  fixed: ClamAV 1.5.4 emits no per-file diagnostic at all for a
+  permission-denied file under `--infected`; the adapter now parses the
+  summary block's `Total errors`/`Scanned files` lines to report that gap
+  explicitly instead of an uninformative `(no stderr)` error.
+- `tests/test_clamav.py::test_real_clamscan_detects_eicar` and two
+  further gated live tests (`test_real_clamscan_unreadable_file_is_informative_error`,
+  `test_real_clamscan_undersized_random_file_not_flagged`) are optional,
+  environment-gated (`TOCSIN_CLAMSCAN`) integration tests; all three have
+  been run and passed against the real 1.5.4 engine, and are never run in
+  CI.
 - Limits: 100 MB per-file (`--max-filesize`), 500 MB per-container
   (`--max-scansize`, overriding the engine's 400 MB default), 20 levels
   of archive recursion (`--max-recursion`), a 300-second scan timeout,

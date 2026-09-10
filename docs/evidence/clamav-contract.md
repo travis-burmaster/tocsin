@@ -5,26 +5,84 @@ contract the adapter implements, so any future change to how Tocsin
 invokes clamscan is a deliberate, re-verified decision rather than an
 assumption.
 
-## No live engine on the development host
+## Live engine verification (2026-09-10)
 
-**clamscan is not installed on the machine this task was implemented on,
-and it was not installed for this task** (global constraint: no project
-builds, install hooks, or dependency installation; the research notes for
-this task were also explicit that clamscan must not be installed on this
-Mac). Every test in `tests/test_clamav.py` therefore runs against an
-injected fake `Runner` and fixture text under `tests/fixtures/clamav/`
-(`help.txt`, `help_missing_alert_exceeds_max.txt`, `version.txt`,
-`version_garbage.txt`), never a real subprocess.
+A real engine was installed and used to verify this contract:
+**ClamAV 1.5.4** (Homebrew bottle `clamav` 1.5.4, `brew install clamav`)
+on macOS 26.6.2 (build 25G83), arm64. Signatures were updated with
+`freshclam`: `main.cvd` v63 (3,287,027 signatures), `daily.cvd` 28119,
+`bytecode.cvd` 339; total known viruses 3,628,058; signature date
+Thu Sep 10 00:24:09 2026. `freshclam` needed one extra manual step beyond
+`brew install clamav` on this bottle (see "Installing the external
+engines" in `docs/development.md`), and printed `ERROR: NULL X509 store`
+twice per database while still reporting `Database test passed` for each
+and writing the `.cvd.sign` files -- a known Homebrew 1.5 quirk; the
+databases were usable despite the error text.
 
-`tests/test_clamav.py::test_real_clamscan_detects_eicar` is written as an
-optional, environment-gated integration test: it only runs when
-`TOCSIN_CLAMSCAN` is set to a real clamscan binary path backed by a
-working signature database. It was **not run** during this task, because
-no such binary was available. It writes the standard EICAR test string
-(`X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-FILE!$H+H*`)
-into a file under pytest's `tmp_path` (never anywhere else, and never
-distributed), scans it, and asserts a `detected` finding. Anyone with a
-real clamscan install can verify the adapter end-to-end by running:
+All ten flags this adapter passes were confirmed present in this build's
+`clamscan --help` (`--stdout`, `--infected`, `--alert-exceeds-max`,
+`--alert-encrypted`, `--max-filesize`, `--max-scansize`,
+`--max-recursion`, `--follow-dir-symlinks`, `--follow-file-symlinks`,
+`--file-list`) -- the man-page-derived flag list below was not just
+theoretical.
+
+`tocsin doctor` reported: `clamscan: engine 1.5.4, signatures 28119
+(Thu Sep 10 00:24:09 2026), required flags present`.
+
+### End-to-end scan
+
+`tocsin scan --files <dir with eicar.txt, clean.txt, sub/nested.txt,
+enc.zip (a password-protected zip)>`: completion `partial`; findings:
+`detected` eicar.txt (evidence `Eicar-Test-Signature`), `skipped`
+enc.zip (evidence `Heuristics.Encrypted.Zip`); coverage `assessed=4
+unassessed=0`; exit code 2 (partial because of the skipped encrypted
+archive). The gated integration test
+(`TOCSIN_CLAMSCAN=/opt/homebrew/bin/clamscan .venv/bin/python -m pytest
+tests/test_clamav.py -k real_clamscan -q`) passed against this engine,
+and the full suite passed with `TOCSIN_CLAMSCAN` set (see
+`docs/evidence/validation.md` for the exact counts).
+
+### Raw engine probes (output routing)
+
+Direct `clamscan --stdout --infected --alert-exceeds-max=yes
+--alert-encrypted=yes --max-filesize=100K --follow-dir-symlinks=0
+--follow-file-symlinks=0 --file-list=...` probes, run outside the
+adapter, confirmed:
+
+- **Limit/encrypted alert strings**: a 300 KB file against a 100K
+  `--max-filesize` produced `<path>: Heuristics.Limits.Exceeded.MaxFileSize
+  FOUND`; a zip produced `<path>: Heuristics.Encrypted.Zip FOUND` -- both
+  exactly the strings this adapter's classifier keys on.
+- **Missing-file diagnostics appear on BOTH streams** with `--stdout`: a
+  `WARNING: <path>: Can't access file` line on stdout, and a plain
+  `<path>: No such file or directory` line on stderr.
+- **rc precedence: 1 wins when any `FOUND` line exists**, even when
+  errors also occurred in the same run -- a file list mixing a
+  detection/heuristic alert with a missing file still exits 1, not 2.
+- **A permission-denied file produces no per-file diagnostic at all**
+  under `--infected` in 1.5.4: scanning only a chmod-000 file yields rc
+  2, stdout containing *only* the summary block (`Scanned files: 0`,
+  `Total errors: 1`), and empty stderr -- no line naming the file on
+  either stream. Before this was handled, Tocsin reported `error` with
+  the uninformative message `clamscan exited 2: (no stderr)` and a
+  coverage count (`assessed=2`) that did not match the one file the
+  engine actually scanned. `src/tocsin/adapters/clamav.py` now parses
+  the `Total errors` and `Scanned files` summary lines explicitly:
+  an unnamed-error count and the scanned/requested gap are reported as
+  explicit `errors` strings instead of "(no stderr)", completion is
+  forced to `partial` when this occurs alongside a `FOUND` line or on rc
+  0/1, and `metadata['coverage']` is corrected to what the engine
+  actually scanned (see `_SUMMARY_KEY_MAP`, `_int_summary_field`, and the
+  `total_errors_note`/`scanned_gap_note` handling in `scan_files`).
+  **`Total errors` is only printed when N > 0** -- a clean run's summary
+  omits the line entirely rather than printing `Total errors: 0` (also
+  confirmed against this engine).
+
+`tests/test_clamav.py::test_real_clamscan_detects_eicar`,
+`test_real_clamscan_unreadable_file_is_informative_error`, and
+`test_real_clamscan_undersized_random_file_not_flagged` are optional,
+environment-gated integration tests (`TOCSIN_CLAMSCAN`) that exercise the
+above against a real binary; run them with:
 
 ```
 TOCSIN_CLAMSCAN=/path/to/clamscan .venv/bin/python -m pytest tests/test_clamav.py -k real_clamscan -q
@@ -263,7 +321,11 @@ Once a real exit code exists:
 Every other adapter in this project (OSV-Scanner, Homebrew) pins a tested
 engine version because a real binary was available to verify against. No
 clamscan binary was available anywhere in this environment for Task 6,
-so there was nothing to pin a version against. Instead:
+so there was nothing to pin a version against at the time. Feature
+detection is kept even after the 2026-09-10 live verification against
+ClamAV 1.5.4 (see "Live engine verification" above): only that one engine
+version on one host has been confirmed, which is not enough evidence to
+switch to a version pin the way OSV-Scanner's is. Instead:
 
 1. `shutil.which('clamscan')` absent -> `unavailable`, and **no command is
    ever run** (not even `--version`).

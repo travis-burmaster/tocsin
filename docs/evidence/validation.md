@@ -19,7 +19,7 @@ Host used for every "live" row below, unless noted otherwise:
 | Homebrew inventory (`--brew`) | Yes -- real `brew info --json=v2 --installed` on this host | 2026-09-08 | Task 3 report, below |
 | curl advisory matching (`assess_curl`) | Snapshot reviewed against upstream `curl.se/docs/vuln.json`; matching logic unit-tested only, no live-vulnerable curl install exercised | 2026-09-08 | `docs/evidence/curl-advisories.md` |
 | OSV-Scanner dependency scan (`--project`) | Yes -- real osv-scanner v2.5.1 binary, real offline PyPI database, real detections | 2026-09-08 | Task 4 report, `docs/evidence/osv-contract.md`, below |
-| ClamAV file scan (`--files`) | No -- no clamscan binary was ever available; a Docker probe was attempted and killed by the host for low memory | 2026-09-08 (attempt) | Task 6 report / `progress.md`, `docs/evidence/clamav-contract.md`, below |
+| ClamAV file scan (`--files`) | Yes -- real ClamAV 1.5.4 (`brew install clamav`), real signature database, real EICAR detection, real encrypted-archive and permission-denied probes | 2026-09-10 | `docs/evidence/clamav-contract.md`, below |
 | macOS posture + startup review (`--posture`) | Yes -- real `spctl`/`csrutil`/`fdesetup`/`socketfilterfw` and real launch-directory enumeration on this host | 2026-09-08 | Task 7 report, `docs/evidence/posture-contract.md`, below |
 | Package build + install (isolated venv) | Yes -- `python -m build`, wheel install, `tocsin doctor` and a read-only `--posture` scan from the installed console script | 2026-09-08 | below |
 | Linux / Windows scanning | No -- not implemented; portable fixture tests only (CI) | n/a | `docs/coverage.md` |
@@ -69,36 +69,60 @@ This test is environment-gated and is **not** run in CI (see
 `.github/workflows/tests.yml`); it requires a real osv-scanner binary and
 a populated offline database neither of which are installed in CI.
 
-## ClamAV file scan (Task 6) -- not verified against a real engine
+## ClamAV file scan (Task 6, live-verified 2026-09-10)
 
-No clamscan binary was available anywhere in this environment at any
-point during implementation, and none was installed for this project
-(installing engines is out of scope for Tocsin's own build/test process).
-A Docker-based probe (`docker` pulling `clamav/clamav:stable`, intended to
-exercise real return codes, `--stdout` stream routing, and exact
-`Heuristics.*` alert strings against a live engine) was attempted in the
-background during Task 6's review pass; quoted from `progress.md`:
+A real engine was installed and used to verify the adapter end to end:
+**ClamAV 1.5.4** (Homebrew bottle `clamav` 1.5.4, `brew install clamav`)
+with a `freshclam`-updated signature database (28119, Thu Sep 10
+00:24:09 2026; 3,628,058 known viruses), on this same host (macOS 26.6.2,
+build 25G83, arm64).
 
-> Task 6: ClamAV docker probe KILLED by the system for low memory before
-> the image finished pulling (host already runs 5 containers); not
-> retried. Ruling: the real-engine items stay documented as untested in
-> docs/evidence/clamav-contract.md; final review should list them as
-> pre-release verification work -- cost if wrong: an engine behaviour
-> mismatch discovered only on a host with clamscan.
+Results, quoted/paraphrased from `docs/evidence/clamav-contract.md`'s
+"Live engine verification (2026-09-10)" section:
 
-Every test in `tests/test_clamav.py` therefore runs against fixture text
-(`tests/fixtures/clamav/`) and an injected fake `Runner`, never a real
-subprocess. `docs/evidence/clamav-contract.md` records exactly which
-flags, return codes, and output shapes are implemented from the
-`clamscan(1)` man page rather than from an observed real run, and
-`tests/test_clamav.py::test_real_clamscan_detects_eicar` remains an
-optional, environment-gated integration test (`TOCSIN_CLAMSCAN`) that
-anyone with a real clamscan install can run to close this gap -- it is
-not run in CI.
+> `tocsin doctor`: `clamscan: engine 1.5.4, signatures 28119 (Thu Sep 10
+> 00:24:09 2026), required flags present`.
+>
+> `tocsin scan --files <dir with eicar.txt, clean.txt, sub/nested.txt,
+> enc.zip>`: completion `partial`; findings: `detected` eicar.txt
+> (evidence `Eicar-Test-Signature`), `skipped` enc.zip (evidence
+> `Heuristics.Encrypted.Zip`); coverage `assessed=4 unassessed=0`; exit
+> code 2.
+>
+> A direct probe of a chmod-000 (permission-denied) file confirmed ClamAV
+> 1.5.4 emits **no per-file diagnostic at all** for it under `--infected`
+> on either stream -- only rc 2, `Scanned files: 0`, and `Total errors: 1`
+> in the summary block. This exposed a real reporting gap (Tocsin
+> reported `error` with the message `clamscan exited 2: (no stderr)` and
+> a coverage count that did not match what was actually scanned), fixed
+> in `src/tocsin/adapters/clamav.py` (see that file's git history and
+> `docs/evidence/clamav-contract.md`).
 
-**This is the single largest pre-release verification gap**: the ClamAV
-adapter's engine contract (return codes, `--stdout` routing, alert string
-formats) is implemented from documentation, not observed behavior.
+The gated integration tests passed against this engine:
+
+```
+TOCSIN_CLAMSCAN=/opt/homebrew/bin/clamscan .venv/bin/python -m pytest tests/test_clamav.py -k real_clamscan -q
+# 3 passed
+```
+
+and the full suite passed with `TOCSIN_CLAMSCAN` set:
+
+```
+TOCSIN_CLAMSCAN=/opt/homebrew/bin/clamscan .venv/bin/python -m pytest -q -W error::ResourceWarning
+# 302 passed, 2 skipped
+```
+
+`docs/evidence/clamav-contract.md` records the full flag/return-code/
+output-routing contract this adapter implements, including exactly which
+parts are now confirmed against this real 1.5.4 binary versus still
+derived from the `clamscan(1)` man page alone (e.g. the encrypted-`.zip`
+alert string was confirmed; other container formats such as `.7z`/`.rar`/
+`.pdf` were not exercised live).
+
+**Remaining gap**: only ClamAV 1.5.4 on one macOS host has been verified.
+A different clamscan version, a Linux/Windows build, or a differently
+configured signature database could behave differently; this has not
+been re-checked across engine versions or hosts.
 
 ## macOS posture and startup review (Task 7)
 
