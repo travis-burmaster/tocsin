@@ -651,7 +651,14 @@ def scan_files(path: Path, *, runner: Runner = run_command, observed_at: str | N
         # already passed the strict-UTF-8 check in `_ambiguity_reason`,
         # so this write can never raise UnicodeEncodeError.
         with os.fdopen(fd, 'w', encoding='utf-8') as handle:
-            os.fchmod(handle.fileno(), 0o600)
+            # os.fchmod is missing on Windows before Python 3.13; mkstemp
+            # already created the file 0600 on POSIX, so the chmod is a
+            # belt-and-braces step and the path form is an acceptable
+            # fallback where fchmod is unavailable.
+            if hasattr(os, 'fchmod'):
+                os.fchmod(handle.fileno(), 0o600)
+            else:
+                os.chmod(tmp_path_str, 0o600)
             for accepted_path in enumeration.accepted:
                 handle.write(f'{accepted_path}\n')
 
