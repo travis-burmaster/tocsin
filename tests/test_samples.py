@@ -23,7 +23,10 @@ own freshly rendered output, then re-run the test to confirm it passes.
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+
+import pytest
 
 import tocsin.cli as cli_module
 from tocsin.models import CommandResult
@@ -212,6 +215,10 @@ TEXT_HEADER = (
 )
 
 
+@pytest.mark.skipif(
+    os.name != 'posix',
+    reason='report paths are OS-native; the published samples are POSIX renderings',
+)
 def test_text_sample_matches_published_report(monkeypatch, tmp_path, force_darwin):
     # force_darwin: the sample scan needs Darwin's capability set to
     # reach every adapter (supported_capabilities() is empty elsewhere) --
@@ -223,6 +230,10 @@ def test_text_sample_matches_published_report(monkeypatch, tmp_path, force_darwi
     assert rendered == published
 
 
+@pytest.mark.skipif(
+    os.name != 'posix',
+    reason='report paths are OS-native; the published samples are POSIX renderings',
+)
 def test_json_sample_matches_published_report(monkeypatch, tmp_path, force_darwin):
     rendered = _generate(monkeypatch, tmp_path, "json")
     published = (SAMPLES_DIR / "report-sample.json").read_text()

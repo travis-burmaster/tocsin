@@ -47,7 +47,10 @@ tocsin scan --brew --kb /path/to/oss-security-kb \
 Paths in both files are placeholders (`/Users/example/...`); the test
 runs against real `tmp_path` temporary directories, which are
 string-replaced with these placeholders before comparing against the
-published files.
+published files. These paths -- and the placeholder substitution that
+produces them -- are POSIX renderings, so the byte-for-byte comparison
+in `tests/test_samples.py` only runs on macOS and Linux CI; it is
+skipped on Windows, where scanning itself is unsupported by design.
 
 ## Regenerating
 
