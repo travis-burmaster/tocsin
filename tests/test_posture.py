@@ -437,6 +437,7 @@ def test_relative_program_needs_review(tmp_path):
     assert 'PATH' in finding.action
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='macOS launch-item paths are POSIX absolute paths')
 def test_benign_plist_with_existing_executable_is_no_known_match(tmp_path):
     plist_path = tmp_path / 'com.example.benign.plist'
     with open(plist_path, 'wb') as handle:

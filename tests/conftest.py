@@ -22,5 +22,10 @@ def force_darwin(monkeypatch):
     pytest, the same lever the unsupported-platform-scope tests already
     use in the other direction (forcing 'Linux' to prove a scope is
     reported unsupported, never silently skipped).
+
+    Also pins `platform.machine()` to 'arm64' so `architecture` in a
+    rendered report is deterministic regardless of the CI runner's real
+    CPU architecture (Ubuntu/Windows runners are x86_64).
     """
     monkeypatch.setattr(cli_module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cli_module.platform, "machine", lambda: "arm64")

@@ -207,6 +207,7 @@ def test_spaces_and_leading_dashes_are_scanned(monkeypatch, tmp_path):
     assert result.completion == 'complete'
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='Windows forbids control characters in filenames')
 def test_newline_in_filename_is_skipped_and_partial(monkeypatch, tmp_path):
     _fake_which(monkeypatch)
     bad_name = 'bad\nname.txt'
@@ -225,6 +226,7 @@ def test_newline_in_filename_is_skipped_and_partial(monkeypatch, tmp_path):
     assert result.metadata['ambiguous_skipped'] == 1
 
 
+@pytest.mark.skipif(os.name != 'posix', reason="Windows forbids ':' in filenames")
 def test_colon_space_in_filename_is_skipped(monkeypatch, tmp_path):
     _fake_which(monkeypatch)
     bad_path = tmp_path / 'weird: name.txt'
@@ -408,6 +410,7 @@ def test_rc2_with_one_found_is_partial_keeping_finding(monkeypatch, tmp_path):
     assert result.findings[0].status == 'detected'
 
 
+@pytest.mark.skipif(os.name != 'posix', reason='Windows forbids control characters in filenames')
 def test_rc2_no_found_retains_enumeration_skip_and_error(monkeypatch, tmp_path):
     """rc 2 with no parsed FOUND lines is still 'error' with zero PARSED
     alert findings (the brief's named case), but enumeration-time
@@ -439,6 +442,10 @@ def test_ambiguity_reason_flags_non_utf8_filename():
     assert 'UTF-8' in reason
 
 
+@pytest.mark.skipif(
+    os.name != 'posix',
+    reason='Windows filenames are UTF-16; os.fsencode semantics differ from POSIX',
+)
 def test_non_utf8_filename_on_disk_is_skipped_and_partial(monkeypatch, tmp_path):
     _fake_which(monkeypatch)
     bad_bytes = os.fsencode(str(tmp_path)) + b'/bad-\xff-name.txt'
@@ -589,9 +596,17 @@ def test_parse_stdout_diagnostic_line_naming_requested_path_is_error():
     # Not one of the four known trigger substrings, but names a requested
     # path in the "<path>: <message>" shape clamscan's per-file
     # diagnostics take -- must still be captured as an error.
+    #
+    # The stdout line is built from str(requested[0]) rather than a
+    # hardcoded '/tmp/thing.txt' literal: the adapter matches diagnostic
+    # lines against `{str(p) for p in requested}` (clamav.py's
+    # requested_set), and on Windows str(Path('/tmp/thing.txt')) renders
+    # with backslashes ('\\tmp\\thing.txt'), which would never match a
+    # forward-slash literal.
     requested = [Path('/tmp/thing.txt')]
-    parsed = parse_clamscan_output('/tmp/thing.txt: Empty file\n', '', requested)
-    assert any('/tmp/thing.txt' in e for e in parsed.errors)
+    requested_str = str(requested[0])
+    parsed = parse_clamscan_output(f'{requested_str}: Empty file\n', '', requested)
+    assert any(requested_str in e for e in parsed.errors)
     assert parsed.detections == () and parsed.heuristics == () and parsed.skipped == ()
 
 

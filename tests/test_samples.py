@@ -124,7 +124,11 @@ def _generate(monkeypatch, tmp_path: Path, fmt: str) -> str:
     # files). Patched here directly rather than relying solely on
     # tests/conftest.py's force_darwin fixture, since _regenerate() below
     # calls this with a plain MonkeyPatch instance, not through pytest.
+    # `platform.machine()` is pinned to 'arm64' too, so the published
+    # sample's "architecture" stays deterministic on x86_64 CI runners
+    # (Ubuntu/Windows) instead of reflecting their real CPU.
     monkeypatch.setattr(cli_module.platform, "system", lambda: "Darwin")
+    monkeypatch.setattr(cli_module.platform, "machine", lambda: "arm64")
 
     project_dir = tmp_path / "project"
     project_dir.mkdir()
