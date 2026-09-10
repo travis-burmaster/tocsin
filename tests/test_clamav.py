@@ -636,6 +636,110 @@ def test_summary_absent_keys_are_none():
         assert parsed.summary[key] is None
 
 
+def test_summary_parses_total_errors_and_scanned_directories():
+    stdout = (
+        '----------- SCAN SUMMARY -----------\n'
+        'Scanned directories: 0\n'
+        'Scanned files: 0\n'
+        'Total errors: 2\n'
+    )
+    parsed = parse_clamscan_output(stdout, '', [])
+
+    assert parsed.summary['total_errors'] == '2'
+    assert parsed.summary['scanned_directories'] == '0'
+
+
+# --- unnamed file errors (ClamAV 1.5.4 live-engine behaviour: a
+# permission-denied file under --infected produces NO per-file line on
+# either stream, only rc 2 / "Total errors: N" / a Scanned-files gap) ------
+
+def test_rc2_unnamed_file_error_is_informative_not_no_stderr(monkeypatch, tmp_path):
+    """rc 2, no FOUND lines, 'Total errors: 1' and 'Scanned files: 0' for
+    two requested files: real 1.5.4 output for one unreadable file among
+    two (see live-engine-evidence.md). Must name the error count and the
+    scanned/requested gap instead of '(no stderr)', with zero findings."""
+    _fake_which(monkeypatch)
+    (tmp_path / 'clean.txt').write_text('hi')
+    (tmp_path / 'noperm.txt').write_text('hi')
+
+    def _scan(argv, *, timeout, max_bytes, extra_env=None):
+        stdout = (
+            '----------- SCAN SUMMARY -----------\n'
+            'Known viruses: 3628058\n'
+            'Engine version: 1.5.4\n'
+            'Scanned directories: 1\n'
+            'Scanned files: 0\n'
+            'Infected files: 0\n'
+            'Total errors: 1\n'
+            'Data scanned: 0.00 MB\n'
+            'Time: 0.010 sec (0 m 0 s)\n'
+        )
+        return CommandResult(2, stdout, '', None)
+
+    result = scan_files(tmp_path, runner=_runner(scan=_scan))
+
+    assert result.completion == 'error'
+    assert result.findings == ()
+    assert any('1 file error' in e for e in result.errors)
+    assert any('0 of 2' in e for e in result.errors)
+    assert not any('(no stderr)' in e for e in result.errors)
+
+
+def test_rc1_found_line_with_unnamed_error_is_partial_with_coverage_gap(monkeypatch, tmp_path):
+    """rc 1 with one FOUND line plus 'Total errors: 1' and a scanned-files
+    gap (one of two requested files was not scanned): the detection is
+    kept, completion is forced to partial, and coverage reflects the
+    actual scanned count, not the requested count."""
+    _fake_which(monkeypatch)
+    eicar = tmp_path / 'eicar.txt'
+    eicar.write_text('eicar-like')
+    (tmp_path / 'noperm.txt').write_text('hi')
+
+    def _scan(argv, *, timeout, max_bytes, extra_env=None):
+        stdout = (
+            f'{eicar}: Eicar-Signature FOUND\n'
+            '----------- SCAN SUMMARY -----------\n'
+            'Scanned files: 1\n'
+            'Infected files: 1\n'
+            'Total errors: 1\n'
+        )
+        return CommandResult(1, stdout, '', None)
+
+    result = scan_files(tmp_path, runner=_runner(scan=_scan))
+
+    assert result.completion == 'partial'
+    detected = [f for f in result.findings if f.status == 'detected']
+    assert len(detected) == 1
+    assert detected[0].subject == str(eicar)
+    assert result.metadata['coverage'] == {'assessed': 1, 'unassessed': 1}
+    assert exit_code([result]) == 2
+
+
+def test_rc0_clean_with_zero_total_errors_and_full_scan_is_complete(monkeypatch, tmp_path):
+    """rc 0, 'Total errors: 0', Scanned files == requested: a clean run
+    must remain complete with zero findings even with the new summary
+    keys present."""
+    _fake_which(monkeypatch)
+    (tmp_path / 'a.txt').write_text('hi')
+    (tmp_path / 'b.txt').write_text('hi')
+
+    def _scan(argv, *, timeout, max_bytes, extra_env=None):
+        stdout = (
+            '----------- SCAN SUMMARY -----------\n'
+            'Scanned files: 2\n'
+            'Infected files: 0\n'
+            'Total errors: 0\n'
+        )
+        return CommandResult(0, stdout, '', None)
+
+    result = scan_files(tmp_path, runner=_runner(scan=_scan))
+
+    assert result.completion == 'complete'
+    assert result.findings == ()
+    assert exit_code([result]) == 0
+    assert result.metadata['coverage']['assessed'] == 2
+
+
 # --- temp file handling ---------------------------------------------------------
 
 @pytest.mark.skipif(os.name != 'posix', reason='POSIX file-mode bits (0600) do not apply on Windows')
@@ -739,3 +843,66 @@ def test_real_clamscan_detects_eicar(monkeypatch, tmp_path):
 
     assert result.completion == 'complete'
     assert any(f.status == 'detected' for f in result.findings)
+
+
+@pytest.mark.skipif(
+    not _REAL_CLAMSCAN,
+    reason='set TOCSIN_CLAMSCAN to a clamscan binary with a working database to run the real permission-denied integration test',
+)
+@pytest.mark.skipif(os.name != 'posix', reason='chmod-based permission denial is POSIX-only')
+def test_real_clamscan_unreadable_file_is_informative_error(tmp_path):
+    """Live-engine confirmation of the ClamAV 1.5.4 behaviour recorded in
+    live-engine-evidence.md: --file-list has clean.txt and a chmod-000
+    file; clamscan itself is left on PATH (shutil.which untouched), so
+    this exercises the real engine-discovery probe too. rc must be 2, the
+    unnamed file error must be reported informatively (never
+    '(no stderr)'), and no finding is ever invented."""
+    if os.geteuid() == 0:
+        pytest.skip('root can read any file regardless of mode')
+
+    clean = tmp_path / 'clean.txt'
+    clean.write_text('hello')
+    noperm = tmp_path / 'noperm.txt'
+    noperm.write_text('hello')
+    noperm.chmod(0)
+
+    from tocsin.runner import run_command
+
+    try:
+        result = scan_files(tmp_path, runner=run_command)
+    finally:
+        noperm.chmod(0o600)
+
+    assert result.completion == 'error'
+    assert result.findings == ()
+    assert result.metadata['command'] is not None  # sanity: a real scan ran, not a probe failure
+    assert any('1 file error' in e for e in result.errors)
+    assert any('1 of 2' in e for e in result.errors)
+    assert not any('(no stderr)' in e for e in result.errors)
+    assert exit_code([result]) == 2
+
+
+@pytest.mark.skipif(
+    not _REAL_CLAMSCAN,
+    reason='set TOCSIN_CLAMSCAN to a clamscan binary with a working database to run the real oversized-file limit check',
+)
+def test_real_clamscan_undersized_random_file_not_flagged(tmp_path):
+    """Live-engine sanity check: a 300 KB random file is well under the
+    production 100M --max-filesize limit and must scan clean. ClamAV
+    1.5.4 omits the 'Total errors' line entirely on a clean run (confirmed
+    by direct probe against this engine -- it does not print
+    'Total errors: 0'), so the new total_errors summary key must parse as
+    None here rather than triggering the unnamed-file-error path."""
+    import random
+
+    target = tmp_path / 'random.bin'
+    target.write_bytes(bytes(random.getrandbits(8) for _ in range(300 * 1024)))
+
+    from tocsin.runner import run_command
+
+    result = scan_files(tmp_path, runner=run_command)
+
+    assert result.completion == 'complete'
+    assert result.findings == ()
+    assert result.metadata['summary']['total_errors'] is None
+    assert result.metadata['summary']['scanned_files'] == '1'

@@ -268,8 +268,10 @@
         "summary": {
           "known_viruses": null,
           "engine_version": null,
+          "scanned_directories": null,
           "scanned_files": "2",
           "infected_files": "1",
+          "total_errors": null,
           "data_scanned": null,
           "data_read": null,
           "time": null

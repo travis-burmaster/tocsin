@@ -19,12 +19,16 @@ itself separates a path from its verdict) or that are not valid UTF-8 (so
 they cannot be written into the file-list at all) -- see
 `_ambiguity_reason`.
 
-No engine was available on the development host to pin a tested version
-against, so this uses feature detection instead: `clamscan --help` output
-is checked for every flag Tocsin passes, and a clamscan lacking
-`--alert-exceeds-max` in particular is treated as `unavailable`, because
-without it oversized content could be reported clean rather than as a
-`Heuristics.Limits.Exceeded` alert. See docs/evidence/clamav-contract.md.
+No engine was available on the development host when this module was
+first implemented, so it uses feature detection rather than a pinned
+tested version: `clamscan --help` output is checked for every flag Tocsin
+passes, and a clamscan lacking `--alert-exceeds-max` in particular is
+treated as `unavailable`, because without it oversized content could be
+reported clean rather than as a `Heuristics.Limits.Exceeded` alert. A
+real ClamAV 1.5.4 install was later used to verify this contract
+end-to-end (2026-09-10); feature detection is kept rather than switching
+to a version pin, since only that one engine version on one host has
+been verified. See docs/evidence/clamav-contract.md.
 
 This never passes `--remove`, `--move`, `--copy`, or `--recursive`, and
 never downloads or otherwise fetches signatures.
@@ -92,8 +96,10 @@ _CONTROL_CHAR_RE = re.compile(r'[\x00-\x1f\x7f]')
 _SUMMARY_KEY_MAP = {
     'Known viruses': 'known_viruses',
     'Engine version': 'engine_version',
+    'Scanned directories': 'scanned_directories',
     'Scanned files': 'scanned_files',
     'Infected files': 'infected_files',
+    'Total errors': 'total_errors',
     'Data scanned': 'data_scanned',
     'Data read': 'data_read',
     'Time': 'time',
@@ -159,16 +165,22 @@ def _parse_summary(stdout: str) -> dict[str, object]:
     return summary
 
 
-def _files_scanned_from_summary(summary: dict[str, object]) -> int | None:
-    """Extract the scanned-file count from a parsed summary dict, or None
-    if absent/unparseable."""
-    raw = summary.get('scanned_files')
+def _int_summary_field(summary: dict[str, object], key: str) -> int | None:
+    """Extract an integer-valued summary field parsed by `_parse_summary`
+    (e.g. 'scanned_files', 'total_errors'), or None if absent/unparseable."""
+    raw = summary.get(key)
     if raw is None:
         return None
     try:
         return int(str(raw))
     except ValueError:
         return None
+
+
+def _files_scanned_from_summary(summary: dict[str, object]) -> int | None:
+    """Extract the scanned-file count from a parsed summary dict, or None
+    if absent/unparseable."""
+    return _int_summary_field(summary, 'scanned_files')
 
 
 def _classify_alert(path_str: str, name: str, observed_at: str) -> tuple[str, Finding]:
@@ -694,17 +706,51 @@ def scan_files(path: Path, *, runner: Runner = run_command, observed_at: str | N
     metadata['summary'] = parsed.summary
     metadata['files_scanned'] = _files_scanned_from_summary(parsed.summary)
 
+    # ClamAV 1.5.4 (live-verified: docs/evidence/clamav-contract.md) prints
+    # NO per-file diagnostic for a permission-denied file under
+    # --infected, on either stream: the only signals are a non-zero rc,
+    # 'Total errors: N' in the summary, and 'Scanned files' falling short
+    # of the number of files Tocsin actually submitted. Surface both
+    # signals explicitly rather than letting them pass silently.
+    total_errors = _int_summary_field(parsed.summary, 'total_errors')
+    files_scanned = metadata['files_scanned']
+    submitted = len(enumeration.accepted)
+
+    total_errors_note = None
+    if total_errors is not None and total_errors > 0:
+        scanned_display = files_scanned if files_scanned is not None else 0
+        total_errors_note = (
+            f'clamscan reported {total_errors} file error(s) it did not name; '
+            f'{scanned_display} of {submitted} requested files were scanned'
+        )
+
+    scanned_gap_note = None
+    if files_scanned is not None and files_scanned < submitted:
+        gap = submitted - files_scanned
+        scanned_gap_note = f'{gap} requested file(s) were not scanned'
+        # Coverage must reflect what the engine actually scanned, not what
+        # Tocsin handed it: files it never got to are unassessed, same as
+        # an ambiguous filename Tocsin itself declined to submit.
+        metadata['coverage'] = {
+            'assessed': files_scanned,
+            'unassessed': submitted - files_scanned + ambiguous_skipped,
+        }
+
     has_found_lines = bool(parsed.detections or parsed.heuristics or parsed.skipped)
 
     if rc == 2 and not has_found_lines:
         # "some error(s) occurred" and nothing was parsed at all (e.g. a
-        # missing signature database): never invent a clean/no-match
+        # missing signature database, or -- per the live-engine evidence
+        # above -- an unnamed unreadable file): never invent a clean/no-match
         # finding here -- report a plain failure with zero PARSED alert
         # findings. Enumeration-time findings/errors (ambiguous names,
         # stat failures, the enumeration cap) are still retained: "exit
         # 2: partial or failed, retaining any findings" applies to those
         # even though the scan attempt itself produced nothing usable.
-        detail = result.stderr.strip() or '(no stderr)'
+        # '(no stderr)' is only used when there is genuinely nothing else
+        # to say -- when the summary's own error/gap counts explain what
+        # happened, that explanation is used instead.
+        detail = result.stderr.strip() or total_errors_note or scanned_gap_note or '(no stderr)'
         combined_errors = tuple(errors) + tuple(parsed.errors) + (f'clamscan exited 2: {detail}',)
         return CheckResult(
             name=_NAME, completion='error', findings=tuple(findings),
@@ -715,7 +761,9 @@ def scan_files(path: Path, *, runner: Runner = run_command, observed_at: str | N
         completion = 'partial'
         errors.append('clamscan exited 2 (some errors occurred); keeping the alerts it did parse')
     elif rc in (0, 1):
-        completion = 'partial' if (needs_partial or parsed.skipped or parsed.errors) else 'complete'
+        completion = 'partial' if (
+            needs_partial or parsed.skipped or parsed.errors or total_errors_note or scanned_gap_note
+        ) else 'complete'
     else:
         detail = result.stderr.strip() or '(no stderr)'
         combined_errors = tuple(errors) + tuple(parsed.errors) + (f'clamscan exited {rc}: {detail}',)
@@ -723,6 +771,11 @@ def scan_files(path: Path, *, runner: Runner = run_command, observed_at: str | N
             name=_NAME, completion='error', findings=tuple(findings),
             errors=combined_errors, metadata=metadata,
         )
+
+    if total_errors_note is not None:
+        errors.append(total_errors_note)
+    if scanned_gap_note is not None:
+        errors.append(scanned_gap_note)
 
     findings += list(parsed.detections) + list(parsed.heuristics) + list(parsed.skipped)
     errors += list(parsed.errors)
